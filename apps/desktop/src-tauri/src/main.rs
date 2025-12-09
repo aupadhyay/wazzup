@@ -29,11 +29,18 @@ struct AppState {
 }
 
 fn create_main_window(app: &tauri::AppHandle) {
-    let win_builder =
-        WebviewWindowBuilder::from_config(app, &app.config().app.windows.get(1).unwrap().clone())
-            .unwrap()
-            .build()
-            .unwrap();
+    let win_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("/main-window".into()))
+        .title("Thoughts")
+        .inner_size(800.0, 600.0)
+        .resizable(true)
+        .maximizable(true)
+        .minimizable(true)
+        .closable(true)
+        .transparent(true)
+        .center()
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .build()
+        .unwrap();
 
     let _ = win_builder.show();
     let _ = win_builder.set_focus();
@@ -41,12 +48,11 @@ fn create_main_window(app: &tauri::AppHandle) {
 
 #[tauri::command]
 fn open_main_window(app: tauri::AppHandle) {
+    // Always destroy existing window and create fresh one to avoid stale data
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-    } else {
-        create_main_window(&app);
+        let _ = window.close();
     }
+    create_main_window(&app);
 }
 
 #[tauri::command]
@@ -111,12 +117,11 @@ fn main() {
                     let app_handle = tray.app_handle();
                     match event.id().as_ref() {
                         "open" => {
+                            // Always create fresh window to avoid stale data
                             if let Some(window) = app_handle.get_webview_window("main") {
-                                window.show().unwrap();
-                                window.set_focus().unwrap();
-                            } else {
-                                create_main_window(app_handle);
+                                let _ = window.close();
                             }
+                            create_main_window(app_handle);
                         }
                         "quit" => app_handle.exit(0),
                         _ => {}

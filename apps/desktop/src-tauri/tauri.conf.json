@@ -31,21 +31,6 @@
         "y": 100,
         "visible": false,
         "url": "/quick-panel"
-      },
-      {
-        "label": "main",
-        "title": "Thoughts",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "maximizable": true,
-        "minimizable": true,
-        "closable": true,
-        "transparent": true,
-        "center": true,
-        "visible": false,
-        "url": "/main-window",
-        "titleBarStyle": "Overlay"
       }
     ],
     "security": {

@@ -41,7 +41,7 @@ function highlightMatches(text: string, searchQuery: string): React.ReactNode {
 
   return parts.map((part, index) =>
     regex.test(part) ? (
-      <span key={index} className="bg-yellow-500/30 text-yellow-200">
+      <span key={part} className="bg-yellow-500/30 text-yellow-200">
         {part}
       </span>
     ) : (
@@ -63,13 +63,9 @@ export function MainWindow() {
   } = trpc.getThoughts.useQuery(
     debouncedSearchQuery.trim() ? { search: debouncedSearchQuery } : undefined,
     {
-      retry: 1,
+      retry: 2,
     }
   )
-
-  useEffect(() => {
-    console.log(filteredThoughts)
-  }, [filteredThoughts])
 
   return (
     <div className="flex flex-col h-screen w-screen bg-zinc-900 text-white select-none">
