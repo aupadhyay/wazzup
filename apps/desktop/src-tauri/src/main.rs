@@ -16,10 +16,16 @@ use config::Config;
 mod context;
 use context::{active_arc_url, get_focused_app, get_location, get_spotify_track};
 
+// Record mode state
+struct RecordModeState {
+    enabled: bool,
+}
+
 // State type to hold our child process and config
 struct AppState {
     server: Mutex<Option<CommandChild>>,
     config: Config,
+    record_mode: Mutex<RecordModeState>,
 }
 
 fn create_main_window(app: &tauri::AppHandle) {
@@ -50,6 +56,19 @@ fn close_quickpanel(app: tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn toggle_record_mode(state: tauri::State<AppState>) -> Result<bool, String> {
+    let mut record_mode = state.record_mode.lock().unwrap();
+    record_mode.enabled = !record_mode.enabled;
+    Ok(record_mode.enabled)
+}
+
+#[tauri::command]
+fn get_record_mode(state: tauri::State<AppState>) -> Result<bool, String> {
+    let record_mode = state.record_mode.lock().unwrap();
+    Ok(record_mode.enabled)
+}
+
 fn toggle_launchbar(app: &tauri::AppHandle) {
     let window = app
         .get_webview_window("quick-panel")
@@ -66,9 +85,12 @@ fn toggle_launchbar(app: &tauri::AppHandle) {
 fn main() {
     let config = Config::new().expect("Failed to initialize config");
 
+    // Determine if we're in dev mode
+    let is_dev = cfg!(debug_assertions);
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .setup(|app| {
+        .setup(move |app| {
             let app_handle = app.app_handle();
 
             // Cleanup any existing server process
@@ -76,7 +98,8 @@ fn main() {
 
             let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
-            let open_i = MenuItem::with_id(app, "open", "Open", true, Some("⌥+Space"))?;
+            let shortcut_hint = if is_dev { "⇧+⌥+Space" } else { "⌥+Space" };
+            let open_i = MenuItem::with_id(app, "open", "Open", true, Some(shortcut_hint))?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open_i, &quit_i])?;
 
@@ -104,9 +127,19 @@ fn main() {
 
             let window = app.get_webview_window("quick-panel").unwrap();
 
-            // Configure window to be non-activating, always on top, and movable
-            window.set_decorations(false).unwrap();
-            window.set_always_on_top(true).unwrap();
+            // Configure window based on dev/prod mode
+            if is_dev {
+                // Dev mode: make it a normal window with decorations for easier debugging
+                window.set_decorations(true).unwrap();
+                window.set_always_on_top(false).unwrap();
+                // Don't hide window initially in dev mode
+            } else {
+                // Production mode: frameless, always on top
+                window.set_decorations(false).unwrap();
+                window.set_always_on_top(true).unwrap();
+                // Hide window initially in production
+                window.hide().unwrap();
+            }
 
             // Run sidecar tRPC server
             let sidecar = app.shell().sidecar("server").unwrap();
@@ -121,6 +154,7 @@ fn main() {
             app.manage(AppState {
                 server: Mutex::new(Some(child)),
                 config,
+                record_mode: Mutex::new(RecordModeState { enabled: false }),
             });
 
             // Set up event handling for stdout/stderr
@@ -146,25 +180,33 @@ fn main() {
                 }
             });
 
-            // Set up window to close when it loses focus
-            let window_clone = window.clone();
-            window.on_window_event(move |event| match event {
-                tauri::WindowEvent::Focused(focused) => {
-                    if !focused {
-                        let _ = window_clone.hide();
+            // Set up window to close when it loses focus (only in production)
+            if !is_dev {
+                let window_clone = window.clone();
+                window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::Focused(focused) => {
+                        if !focused {
+                            let _ = window_clone.hide();
+                        }
                     }
-                }
-                _ => {}
-            });
+                    _ => {}
+                });
+            }
 
-            let alt_space_shortcut = Shortcut::new(Some(Modifiers::ALT), Code::Space);
+            // Use different shortcuts for dev vs production
+            let shortcut = if is_dev {
+                Shortcut::new(Some(Modifiers::SHIFT | Modifiers::ALT), Code::Space)
+            } else {
+                Shortcut::new(Some(Modifiers::ALT), Code::Space)
+            };
+
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             // Register the plugin with handlers
             app.handle().plugin(
                 tauri_plugin_global_shortcut::Builder::new()
-                    .with_handler(move |app, shortcut, event| {
-                        if shortcut == &alt_space_shortcut {
+                    .with_handler(move |app, registered_shortcut, event| {
+                        if registered_shortcut == &shortcut {
                             match event.state() {
                                 ShortcutState::Pressed => {
                                     toggle_launchbar(app);
@@ -177,7 +219,7 @@ fn main() {
                     })
                     .build(),
             )?;
-            app.global_shortcut().register(alt_space_shortcut)?;
+            app.global_shortcut().register(shortcut)?;
 
             Ok(())
         })
@@ -187,7 +229,9 @@ fn main() {
             active_arc_url,
             get_spotify_track,
             get_focused_app,
-            get_location
+            get_location,
+            toggle_record_mode,
+            get_record_mode
         ]);
 
     builder

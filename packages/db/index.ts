@@ -3,7 +3,25 @@ import path from "node:path"
 
 dotenv.config({ path: path.resolve(__dirname, "../../.env") })
 
-import { thoughts } from "./schema"
-import { createThought, getThoughts, getThoughtById } from "./lib"
+import { thoughts, editOperations } from "./schema"
+import {
+  createThought,
+  getThoughts,
+  getThoughtById,
+  createEditOperation,
+  getEditOperations,
+  updateEditOperationsThoughtId,
+  deleteEditOperations
+} from "./lib"
 
-export { thoughts, createThought, getThoughts, getThoughtById }
+export {
+  thoughts,
+  editOperations,
+  createThought,
+  getThoughts,
+  getThoughtById,
+  createEditOperation,
+  getEditOperations,
+  updateEditOperationsThoughtId,
+  deleteEditOperations
+}
