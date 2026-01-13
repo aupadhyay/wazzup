@@ -1,5 +1,5 @@
 use colored::Colorize;
-use std::{str::FromStr, sync::Mutex};
+use std::{env, str::FromStr, sync::Mutex};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -29,18 +29,19 @@ struct AppState {
 }
 
 fn create_main_window(app: &tauri::AppHandle) {
-    let win_builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("/main-window".into()))
-        .title("Thoughts")
-        .inner_size(800.0, 600.0)
-        .resizable(true)
-        .maximizable(true)
-        .minimizable(true)
-        .closable(true)
-        .transparent(true)
-        .center()
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .build()
-        .unwrap();
+    let win_builder =
+        WebviewWindowBuilder::new(app, "main", WebviewUrl::App("/main-window".into()))
+            .title("Thoughts")
+            .inner_size(800.0, 600.0)
+            .resizable(true)
+            .maximizable(true)
+            .minimizable(true)
+            .closable(true)
+            .transparent(true)
+            .center()
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .build()
+            .unwrap();
 
     let _ = win_builder.show();
     let _ = win_builder.set_focus();
@@ -89,10 +90,18 @@ fn toggle_launchbar(app: &tauri::AppHandle) {
 }
 
 fn main() {
-    let config = Config::new().expect("Failed to initialize config");
+    let _ = dotenvy::from_path("../../../.env");
 
     // Determine if we're in dev mode
     let is_dev = cfg!(debug_assertions);
+
+    // Read sidecar port from environment variable, default to 4318
+    let sidecar_port: u16 = env::var("SIDECAR_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(4318);
+
+    let config = Config::new(sidecar_port).expect("Failed to initialize config");
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -147,7 +156,12 @@ fn main() {
             }
 
             // Run sidecar tRPC server
-            let sidecar = app.shell().sidecar("server").unwrap();
+            let sidecar = app
+                .shell()
+                .sidecar("server")
+                .unwrap()
+                .env("SIDECAR_PORT", sidecar_port.to_string());
+
             let (mut rx, child) = sidecar.spawn().expect("Failed to spawn sidecar");
 
             // Store the PID in the file

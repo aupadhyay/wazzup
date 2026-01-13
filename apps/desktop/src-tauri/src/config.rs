@@ -4,10 +4,11 @@ use std::{env, fs};
 
 pub struct Config {
     config_dir: PathBuf,
+    port: u16,
 }
 
 impl Config {
-    pub fn new() -> Result<Self, io::Error> {
+    pub fn new(port: u16) -> Result<Self, io::Error> {
         let config_dir = match env::var("THOUGHTS_CONFIG_PATH").map(PathBuf::from) {
             Ok(path) => path,
             Err(_) => {
@@ -27,11 +28,11 @@ impl Config {
         // Ensure config directory exists
         fs::create_dir_all(&config_dir)?;
 
-        Ok(Config { config_dir })
+        Ok(Config { config_dir, port })
     }
 
     pub fn get_pid_file_path(&self) -> PathBuf {
-        self.config_dir.join("server.pid")
+        self.config_dir.join(format!("server-{}.pid", self.port))
     }
 
     pub fn write_pid_file(&self, pid: u32) -> io::Result<()> {

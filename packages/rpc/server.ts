@@ -16,11 +16,14 @@ const server = createHTTPServer({
     }
     next()
   },
+  
 })
 
+const SIDECAR_PORT = process.env.SIDECAR_PORT ? Number.parseInt(process.env.SIDECAR_PORT, 10) : 4318
+
 console.log("Starting server...")
-server.listen(4318, () => {
-  console.log("Server started on port 4318")
+server.listen(SIDECAR_PORT, () => {
+  console.log(`Server started on port ${SIDECAR_PORT}`)
 })
 
 const shutdown = () => {

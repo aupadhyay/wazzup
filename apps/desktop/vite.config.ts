@@ -8,6 +8,9 @@ const host = process.env.TAURI_DEV_HOST
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  define: {
+    "import.meta.env.VITE_SIDECAR_PORT": JSON.stringify(process.env.SIDECAR_PORT || "4318"),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
