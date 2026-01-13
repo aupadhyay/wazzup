@@ -8,10 +8,11 @@ import {
   createThought,
   getThoughts,
   getThoughtById,
+  getThoughtsPaginated,
   createEditOperation,
   getEditOperations,
   updateEditOperationsThoughtId,
-  deleteEditOperations
+  deleteEditOperations,
 } from "./lib"
 
 export {
@@ -20,8 +21,9 @@ export {
   createThought,
   getThoughts,
   getThoughtById,
+  getThoughtsPaginated,
   createEditOperation,
   getEditOperations,
   updateEditOperationsThoughtId,
-  deleteEditOperations
+  deleteEditOperations,
 }

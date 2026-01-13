@@ -1,10 +1,11 @@
 import {
   createThought,
   getThoughts,
+  getThoughtsPaginated,
   createEditOperation,
   getEditOperations,
   updateEditOperationsThoughtId,
-  deleteEditOperations
+  deleteEditOperations,
 } from "@thoughts/db"
 import { publicProcedure, router } from "./trpc"
 import { z } from "zod"
@@ -24,6 +25,17 @@ const appRouter = router({
     .input(z.object({ search: z.string().optional() }).optional())
     .query(async ({ input }) => {
       return await getThoughts(input?.search)
+    }),
+  getThoughtsPaginated: publicProcedure
+    .input(
+      z.object({
+        limit: z.number().min(1).max(100).default(20),
+        cursor: z.number().optional(),
+        search: z.string().optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      return await getThoughtsPaginated(input.limit, input.cursor, input.search)
     }),
   createEditOperation: publicProcedure
     .input(

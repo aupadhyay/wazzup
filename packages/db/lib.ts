@@ -6,7 +6,7 @@ dotenv.config({ path: path.resolve(__dirname, "../../.env") })
 
 import { drizzle } from "drizzle-orm/better-sqlite3"
 import { thoughts, editOperations } from "./schema"
-import { eq, or, like, isNull } from "drizzle-orm"
+import { eq, or, like, isNull, desc, sql, lt, and } from "drizzle-orm"
 
 export function configPath() {
   if (!process.env.THOUGHTS_CONFIG_PATH) {
@@ -49,6 +49,67 @@ export async function getThoughts(search?: string) {
   }
 
   return query.orderBy(thoughts.timestamp).all()
+}
+
+export async function getThoughtsPaginated(
+  limit = 20,
+  cursor?: number,
+  search?: string
+) {
+  // Build base query with LEFT JOIN to count edit operations
+  let query = dbSingleton()
+    .select({
+      id: thoughts.id,
+      content: thoughts.content,
+      metadata: thoughts.metadata,
+      timestamp: thoughts.timestamp,
+      editCount: sql<number>`COUNT(DISTINCT ${editOperations.id})`.as('edit_count')
+    })
+    .from(thoughts)
+    .leftJoin(editOperations, eq(editOperations.thought_id, thoughts.id))
+    .groupBy(thoughts.id)
+    .orderBy(desc(thoughts.id)) // Newest first
+    .limit(limit + 1) // Fetch one extra to determine if there's a next page
+
+  // Build WHERE conditions
+  const conditions = []
+
+  // Apply cursor filter
+  if (cursor) {
+    conditions.push(lt(thoughts.id, cursor))
+  }
+
+  // Apply search filter
+  if (search?.trim()) {
+    const searchTerm = `%${search.trim()}%`
+    conditions.push(
+      or(
+        like(thoughts.content, searchTerm),
+        like(thoughts.metadata, searchTerm)
+      )
+    )
+  }
+
+  // Combine conditions with AND
+  if (conditions.length > 0) {
+    query = query.where(conditions.length === 1 ? conditions[0] : and(...conditions)) as typeof query
+  }
+
+  // Execute query
+  const results = query.all()
+  const hasMore = results.length > limit
+  const items = hasMore ? results.slice(0, limit) : results
+
+  return {
+    items: items.map(row => ({
+      id: row.id,
+      content: row.content,
+      metadata: row.metadata,
+      timestamp: row.timestamp,
+      hasEditHistory: row.editCount > 0
+    })),
+    nextCursor: hasMore ? items[items.length - 1].id : undefined
+  }
 }
 
 export async function getThoughtById(id: number) {

@@ -1,5 +1,5 @@
 import { trpc } from "../api"
-import { useEffect, useState, useMemo } from "react"
+import { useEffect, useState, useMemo, useRef } from "react"
 import { format } from "date-fns"
 import "./scrollbar.css"
 import type { ContextInfo, Image } from "./quick-panel"
@@ -55,17 +55,49 @@ export function MainWindow() {
   const debouncedSearchQuery = useDebounce(searchQuery, 300)
 
   const {
-    data: filteredThoughts,
+    data,
     isLoading,
     isError,
     error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
     refetch,
-  } = trpc.getThoughts.useQuery(
-    debouncedSearchQuery.trim() ? { search: debouncedSearchQuery } : undefined,
+  } = trpc.getThoughtsPaginated.useInfiniteQuery(
     {
+      limit: 20,
+      search: debouncedSearchQuery.trim() || undefined,
+    },
+    {
+      getNextPageParam: (lastPage) => lastPage.nextCursor,
       retry: 2,
     }
   )
+
+  const filteredThoughts = useMemo(
+    () => data?.pages.flatMap(page => page.items) ?? [],
+    [data]
+  )
+
+  // IntersectionObserver for infinite scroll
+  const observerTarget = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const target = observerTarget.current
+    if (!target) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage()
+        }
+      },
+      { threshold: 0.1 }
+    )
+
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
 
   return (
     <div className="flex flex-col h-screen w-screen bg-zinc-900 text-white select-none">
@@ -121,6 +153,14 @@ export function MainWindow() {
                   key={thought.id}
                   className="group flex flex-col gap-2 bg-zinc-800/50 rounded-xl p-4 hover:bg-zinc-800 transition-colors"
                 >
+                  {thought.hasEditHistory && (
+                    <div className="flex items-center gap-1 text-xs text-zinc-500 mb-1">
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      <span>Edited</span>
+                    </div>
+                  )}
                   <div className="whitespace-pre-wrap text-zinc-100 select-none">
                     <span className="select-text w-min">
                       {highlightMatches(thought.content, debouncedSearchQuery)}
@@ -149,6 +189,25 @@ export function MainWindow() {
                 </div>
               )
             })}
+
+            {/* Sentinel element for infinite scroll */}
+            <div ref={observerTarget} className="h-4" />
+
+            {/* Loading indicator */}
+            {isFetchingNextPage && (
+              <div className="flex justify-center py-4">
+                <div className="animate-pulse text-zinc-400">
+                  Loading more thoughts...
+                </div>
+              </div>
+            )}
+
+            {/* End of list indicator */}
+            {!hasNextPage && filteredThoughts.length > 0 && (
+              <div className="flex justify-center py-4 text-zinc-500 text-sm">
+                No more thoughts to load
+              </div>
+            )}
           </div>
         )}
       </div>
