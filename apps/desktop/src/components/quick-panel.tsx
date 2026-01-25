@@ -112,7 +112,7 @@ export function QuickPanel() {
   const [recordMode, setRecordMode] = useState(false)
   const [editCount, setEditCount] = useState(0)
   const [confirmingDiscard, setConfirmingDiscard] = useState(false)
-  const [currentSessionId] = useState(() => -Date.now()) // Temp ID for edit history
+  const currentSessionIdRef = useRef(-Date.now()) // Temp ID for edit history, regenerated each session
   const [sequenceNum, setSequenceNum] = useState(0)
   const lastInputValueRef = useRef("") // Track exact previous value for diffing
 
@@ -189,7 +189,7 @@ export function QuickPanel() {
 
         createEditOperation(
           {
-            thought_id: currentSessionId,
+            thought_id: currentSessionIdRef.current,
             sequence_num: newSeqNum,
             operation_type: operation.type,
             position: operation.position,
@@ -212,13 +212,20 @@ export function QuickPanel() {
       e.preventDefault()
       try {
         const newState = await invoke<boolean>("toggle_record_mode")
-        setRecordMode(newState)
-        if (!newState && editCount > 0) {
-          // Reset state when turning off
-          setEditCount(0)
+
+        if (newState) {
+          // Starting new recording session - generate fresh ID and sync baseline
+          currentSessionIdRef.current = -Date.now()
+          lastInputValueRef.current = input
           setSequenceNum(0)
+        }
+
+        setRecordMode(newState)
+
+        if (!newState && editCount > 0) {
+          // Reset counts when turning off (baseline stays synced for next session)
+          setEditCount(0)
           setConfirmingDiscard(false)
-          lastInputValueRef.current = ""
         }
       } catch (err) {
         console.error("Failed to toggle record mode", err)
@@ -231,7 +238,7 @@ export function QuickPanel() {
       if (e.key.toLowerCase() === "y") {
         e.preventDefault()
         // Discard history and close
-        deleteHistory({ thought_id: currentSessionId })
+        deleteHistory({ thought_id: currentSessionIdRef.current })
         setEditCount(0)
         setSequenceNum(0)
         setRecordMode(false)
@@ -325,7 +332,7 @@ export function QuickPanel() {
               // Update edit history with real thought ID if recording
               if (recordMode && editCount > 0) {
                 updateHistoryThoughtId({
-                  old_thought_id: currentSessionId,
+                  old_thought_id: currentSessionIdRef.current,
                   new_thought_id: newThought.id,
                 })
               }

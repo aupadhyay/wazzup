@@ -1,32 +1,10 @@
 import http from "node:http"
 import { createHTTPHandler } from "@trpc/server/adapters/standalone"
 import { buildRouter } from "./index"
-import fs from "node:fs"
-import path from "node:path"
-import os from "node:os"
+import * as logger from "./logger"
 
-// Set up logging to file (matches Rust config.rs logic)
-const configDir = process.env.THOUGHTS_CONFIG_PATH || path.join(os.homedir(), ".thoughts")
-fs.mkdirSync(configDir, { recursive: true })
-const logFile = path.join(configDir, `server-${process.pid}.log`)
-const logStream = fs.createWriteStream(logFile, { flags: "a" })
-
-const originalConsoleLog = console.log
-const originalConsoleError = console.error
-
-console.log = (...args: unknown[]) => {
-  const timestamp = new Date().toISOString()
-  const message = `[${timestamp}] [LOG] ${args.map(a => typeof a === "object" ? JSON.stringify(a) : a).join(" ")}\n`
-  logStream.write(message)
-  originalConsoleLog(...args)
-}
-
-console.error = (...args: unknown[]) => {
-  const timestamp = new Date().toISOString()
-  const message = `[${timestamp}] [ERROR] ${args.map(a => typeof a === "object" ? JSON.stringify(a) : a).join(" ")}\n`
-  logStream.write(message)
-  originalConsoleError(...args)
-}
+// Initialize logger (captures console.log/warn/error, handles rotation and cleanup)
+logger.init()
 
 // Capture uncaught exceptions
 process.on("uncaughtException", (err) => {
@@ -78,6 +56,7 @@ const shutdown = () => {
   console.log("\nShutting down server...")
   server.close(() => {
     console.log("Server shutdown complete")
+    logger.close()
     process.exit(0)
   })
 }
