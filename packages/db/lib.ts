@@ -63,7 +63,9 @@ export async function getThoughtsPaginated(
       content: thoughts.content,
       metadata: thoughts.metadata,
       timestamp: thoughts.timestamp,
-      editCount: sql<number>`COUNT(DISTINCT ${editOperations.id})`.as('edit_count')
+      editCount: sql<number>`COUNT(DISTINCT ${editOperations.id})`.as(
+        "edit_count"
+      ),
     })
     .from(thoughts)
     .leftJoin(editOperations, eq(editOperations.thought_id, thoughts.id))
@@ -92,7 +94,9 @@ export async function getThoughtsPaginated(
 
   // Combine conditions with AND
   if (conditions.length > 0) {
-    query = query.where(conditions.length === 1 ? conditions[0] : and(...conditions)) as typeof query
+    query = query.where(
+      conditions.length === 1 ? conditions[0] : and(...conditions)
+    ) as typeof query
   }
 
   // Execute query
@@ -101,14 +105,14 @@ export async function getThoughtsPaginated(
   const items = hasMore ? results.slice(0, limit) : results
 
   return {
-    items: items.map(row => ({
+    items: items.map((row) => ({
       id: row.id,
       content: row.content,
       metadata: row.metadata,
       timestamp: row.timestamp,
-      hasEditHistory: row.editCount > 0
+      hasEditHistory: row.editCount > 0,
     })),
-    nextCursor: hasMore ? items[items.length - 1].id : undefined
+    nextCursor: hasMore ? items[items.length - 1].id : undefined,
   }
 }
 

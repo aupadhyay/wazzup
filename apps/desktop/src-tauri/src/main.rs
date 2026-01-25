@@ -57,6 +57,32 @@ fn open_main_window(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn open_replay_window(app: tauri::AppHandle, thought_id: i64) -> Result<(), String> {
+    // Close existing replay window if open
+    if let Some(window) = app.get_webview_window("replay") {
+        let _ = window.close();
+    }
+
+    // Create new replay window
+    let replay_window = WebviewWindowBuilder::new(
+        &app,
+        "replay",
+        WebviewUrl::App(format!("/replay-window?thoughtId={}", thought_id).into()),
+    )
+    .title("Edit Replay")
+    .inner_size(1000.0, 700.0)
+    .resizable(true)
+    .center()
+    .transparent(true)
+    .title_bar_style(tauri::TitleBarStyle::Overlay)
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    replay_window.show().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn close_quickpanel(app: tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("quick-panel") {
         window.hide().unwrap();
@@ -249,6 +275,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             open_main_window,
+            open_replay_window,
             close_quickpanel,
             active_arc_url,
             get_spotify_track,

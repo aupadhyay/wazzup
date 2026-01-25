@@ -4,6 +4,7 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { trpc, initializeTrpcClient, getTrpcClient } from "./api";
 import { useState, useEffect } from "react";
 import { QueryClient } from "@tanstack/react-query";
+import { ReplayWindow } from "./components/replay-window";
 
 const router = createBrowserRouter([
   {
@@ -13,6 +14,10 @@ const router = createBrowserRouter([
   {
     path: "/quick-panel",
     element: <QuickPanel />,
+  },
+  {
+    path: "/replay-window",
+    element: <ReplayWindow />,
   },
 ]);
 

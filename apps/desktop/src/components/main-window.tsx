@@ -1,6 +1,7 @@
 import { trpc } from "../api"
 import { useEffect, useState, useMemo, useRef } from "react"
 import { formatInTimeZone } from "date-fns-tz"
+import { invoke } from "@tauri-apps/api/core"
 import "./scrollbar.css"
 import type { ContextInfo, Image, LocationInfo } from "./quick-panel"
 
@@ -32,7 +33,7 @@ function formatTimestampWithTimeZone(
 ): { formatted: string; note?: string } {
   // The timestamp from DB is in UTC format: "2026-01-09 02:31:40"
   // We need to treat it as UTC before converting
-  const utcTimestamp = timestamp.includes('Z') ? timestamp : `${timestamp}Z`
+  const utcTimestamp = timestamp.includes("Z") ? timestamp : `${timestamp}Z`
 
   if (location?.timeZone) {
     // Convert from UTC to location's timezone
@@ -95,6 +96,14 @@ function highlightMatches(text: string, searchQuery: string): React.ReactNode {
 export function MainWindow() {
   const [searchQuery, setSearchQuery] = useState("")
   const debouncedSearchQuery = useDebounce(searchQuery, 300)
+
+  const handleReplayClick = async (thoughtId: number) => {
+    try {
+      await invoke("open_replay_window", { thoughtId })
+    } catch (error) {
+      console.error("Failed to open replay window:", error)
+    }
+  }
 
   const {
     data,
@@ -208,7 +217,12 @@ export function MainWindow() {
                   className="group flex flex-col gap-2 bg-zinc-800/50 rounded-xl p-4 hover:bg-zinc-800 transition-colors"
                 >
                   {thought.hasEditHistory && (
-                    <div className="flex items-center gap-1 text-xs text-zinc-500 mb-1">
+                    <button
+                      type="button"
+                      onClick={() => handleReplayClick(thought.id)}
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-zinc-800 text-zinc-300 text-xs hover:bg-zinc-700 cursor-pointer transition-colors mb-1 w-fit"
+                      title="Click to view edit history"
+                    >
                       <svg
                         className="w-3 h-3"
                         fill="none"
@@ -224,7 +238,7 @@ export function MainWindow() {
                         />
                       </svg>
                       <span>Edited</span>
-                    </div>
+                    </button>
                   )}
                   <div className="whitespace-pre-wrap text-zinc-100 select-none">
                     <span className="select-text w-min">

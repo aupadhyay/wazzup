@@ -20,5 +20,6 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["apps/**/*", "packages/**/*"]
+  "include": ["apps/**/*", "packages/**/*"],
+  "exclude": ["packages/actions/scripts/**/*"]
 }
