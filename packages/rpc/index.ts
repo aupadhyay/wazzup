@@ -11,6 +11,10 @@ import { publicProcedure, router } from "./trpc"
 import { z } from "zod"
 
 const appRouter = router({
+  health: publicProcedure.query(() => ({
+    status: "ok",
+    timestamp: Date.now(),
+  })),
   createThought: publicProcedure
     .input(
       z.object({

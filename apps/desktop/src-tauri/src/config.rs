@@ -31,6 +31,10 @@ impl Config {
         Ok(Config { config_dir, port })
     }
 
+    pub fn get_port(&self) -> u16 {
+        self.port
+    }
+
     pub fn get_pid_file_path(&self) -> PathBuf {
         self.config_dir.join(format!("server-{}.pid", self.port))
     }

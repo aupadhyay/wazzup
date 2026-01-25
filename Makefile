@@ -1,25 +1,15 @@
-.PHONY: build clean run test release install browser watch-openapi watch-openapi-fswatch
-
-# Default configuration
-CONFIG ?= debug
-ARGS ?=
-
-# Paths
-BINARY_PATH = $(BUILD_PATH)/$(CONFIG)/Thoughts
-APP_NAME = Thoughts.app
-APP_PATH = /Applications/$(APP_NAME)
-CONTENTS_PATH = $(APP_PATH)/Contents
-RESOURCES_PATH = $(CONTENTS_PATH)/Resources
+.PHONY: build dev build-rpc
 
 TAURI_DIR = apps/desktop/src-tauri
 
 build:
+	pnpm build:rpc
 	cd $(TAURI_DIR) && pnpm run tauri build
 
-run:
+dev:
 	cd $(TAURI_DIR) && pnpm run tauri dev
 
 build-rpc:
-	cd packages/rpc && pnpm build
+	pnpm build:rpc
 
-.DEFAULT_GOAL := build 
+.DEFAULT_GOAL := build

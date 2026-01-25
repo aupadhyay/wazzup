@@ -76,6 +76,11 @@ fn get_record_mode(state: tauri::State<AppState>) -> Result<bool, String> {
     Ok(record_mode.enabled)
 }
 
+#[tauri::command]
+fn get_sidecar_port(state: tauri::State<AppState>) -> u16 {
+    state.config.get_port()
+}
+
 fn toggle_launchbar(app: &tauri::AppHandle) {
     let window = app
         .get_webview_window("quick-panel")
@@ -250,7 +255,8 @@ fn main() {
             get_focused_app,
             get_location,
             toggle_record_mode,
-            get_record_mode
+            get_record_mode,
+            get_sidecar_port
         ]);
 
     builder
