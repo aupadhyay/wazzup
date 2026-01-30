@@ -5,8 +5,15 @@ import os from "node:os"
 dotenv.config({ path: path.resolve(__dirname, "../../.env") })
 
 import { drizzle } from "drizzle-orm/better-sqlite3"
-import { thoughts, editOperations } from "./schema"
-import { eq, or, like, isNull, desc, sql, lt, and } from "drizzle-orm"
+import {
+  thoughts,
+  editOperations,
+  chunks,
+  chunkThoughts,
+  chunkEmbeddings,
+  pipelineState,
+} from "./schema"
+import { eq, or, like, isNull, desc, sql, lt, and, gt, asc } from "drizzle-orm"
 
 export function configPath() {
   if (!process.env.THOUGHTS_CONFIG_PATH) {
@@ -176,4 +183,172 @@ export async function deleteEditOperations(thought_id: number | null) {
         : eq(editOperations.thought_id, thought_id)
     )
     .run()
+}
+
+// ============ Chunk operations ============
+
+export type ChunkType = string
+
+export async function createChunk(
+  type: ChunkType,
+  content: string,
+  context?: string | null
+) {
+  return dbSingleton()
+    .insert(chunks)
+    .values({ type, content, context: context ?? null })
+    .returning()
+    .get()
+}
+
+export async function getChunks(type?: ChunkType) {
+  const query = dbSingleton().select().from(chunks)
+  if (type) {
+    query.where(eq(chunks.type, type))
+  }
+  return query.orderBy(desc(chunks.created_at)).all()
+}
+
+export async function getChunkById(id: number) {
+  return dbSingleton().select().from(chunks).where(eq(chunks.id, id)).get()
+}
+
+// ============ Chunk-Thought relationship operations ============
+
+export async function linkChunkToThought(chunkId: number, thoughtId: number) {
+  return dbSingleton()
+    .insert(chunkThoughts)
+    .values({ chunk_id: chunkId, thought_id: thoughtId })
+    .run()
+}
+
+export async function linkChunkToThoughts(
+  chunkId: number,
+  thoughtIds: number[]
+) {
+  const values = thoughtIds.map((thought_id) => ({
+    chunk_id: chunkId,
+    thought_id,
+  }))
+  return dbSingleton().insert(chunkThoughts).values(values).run()
+}
+
+export async function getChunksForThought(thoughtId: number) {
+  return dbSingleton()
+    .select({
+      id: chunks.id,
+      type: chunks.type,
+      content: chunks.content,
+      context: chunks.context,
+      created_at: chunks.created_at,
+    })
+    .from(chunks)
+    .innerJoin(chunkThoughts, eq(chunkThoughts.chunk_id, chunks.id))
+    .where(eq(chunkThoughts.thought_id, thoughtId))
+    .all()
+}
+
+export async function getThoughtsForChunk(chunkId: number) {
+  return dbSingleton()
+    .select({
+      id: thoughts.id,
+      content: thoughts.content,
+      metadata: thoughts.metadata,
+      timestamp: thoughts.timestamp,
+    })
+    .from(thoughts)
+    .innerJoin(chunkThoughts, eq(chunkThoughts.thought_id, thoughts.id))
+    .where(eq(chunkThoughts.chunk_id, chunkId))
+    .all()
+}
+
+// ============ Embedding operations ============
+
+export async function createChunkEmbedding(
+  chunkId: number,
+  embedding: number[],
+  model: string
+) {
+  return dbSingleton()
+    .insert(chunkEmbeddings)
+    .values({
+      chunk_id: chunkId,
+      embedding: JSON.stringify(embedding),
+      model,
+    })
+    .returning()
+    .get()
+}
+
+export async function getEmbeddingForChunk(chunkId: number) {
+  const result = dbSingleton()
+    .select()
+    .from(chunkEmbeddings)
+    .where(eq(chunkEmbeddings.chunk_id, chunkId))
+    .get()
+
+  if (result) {
+    return {
+      ...result,
+      embedding: JSON.parse(result.embedding) as number[],
+    }
+  }
+  return null
+}
+
+export async function getAllEmbeddings() {
+  const results = dbSingleton().select().from(chunkEmbeddings).all()
+  return results.map((r) => ({
+    ...r,
+    embedding: JSON.parse(r.embedding) as number[],
+  }))
+}
+
+// ============ Pipeline state operations ============
+
+export async function getPipelineState(key: string): Promise<string | null> {
+  const result = dbSingleton()
+    .select()
+    .from(pipelineState)
+    .where(eq(pipelineState.key, key))
+    .get()
+  return result?.value ?? null
+}
+
+export async function setPipelineState(key: string, value: string) {
+  return dbSingleton()
+    .insert(pipelineState)
+    .values({ key, value })
+    .onConflictDoUpdate({
+      target: pipelineState.key,
+      set: { value },
+    })
+    .run()
+}
+
+export async function deletePipelineState(key: string) {
+  return dbSingleton()
+    .delete(pipelineState)
+    .where(eq(pipelineState.key, key))
+    .run()
+}
+
+// ============ Pipeline-specific thought queries ============
+
+export async function getThoughtsAfterId(afterId: number, limit?: number) {
+  const baseQuery = dbSingleton()
+    .select()
+    .from(thoughts)
+    .where(gt(thoughts.id, afterId))
+    .orderBy(asc(thoughts.id))
+
+  if (limit) {
+    return baseQuery.limit(limit).all()
+  }
+
+  return baseQuery.all()
+}
+
+export async function getAllThoughtsOrdered() {
+  return dbSingleton().select().from(thoughts).orderBy(asc(thoughts.id)).all()
 }

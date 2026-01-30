@@ -11,7 +11,9 @@
     "db:studio": "pnpm --filter @thoughts/db exec drizzle-kit studio",
     "db:check": "pnpm --filter @thoughts/db exec drizzle-kit check",
     "build:rpc": "pnpm --filter @thoughts/rpc build",
-    "build:all": "pnpm build:rpc && pnpm --filter @thoughts/desktop build"
+    "build:all": "pnpm build:rpc && pnpm --filter @thoughts/desktop build",
+    "pipeline:run": "pnpm --filter @thoughts/pipeline run",
+    "pipeline:reset": "pnpm --filter @thoughts/pipeline reset"
   },
   "keywords": [],
   "author": "",
