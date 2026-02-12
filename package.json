@@ -12,8 +12,9 @@
     "db:check": "pnpm --filter @thoughts/db exec drizzle-kit check",
     "build:rpc": "pnpm --filter @thoughts/rpc build",
     "build:all": "pnpm build:rpc && pnpm --filter @thoughts/desktop build",
-    "pipeline:run": "pnpm --filter @thoughts/pipeline run",
-    "pipeline:reset": "pnpm --filter @thoughts/pipeline reset"
+    "pipeline:run": "pnpm --filter @thoughts/pipeline exec tsx index.ts",
+    "pipeline:reset": "pnpm --filter @thoughts/pipeline exec tsx index.ts --reset",
+    "chat": "pnpm --filter @thoughts/chat exec tsx index.ts"
   },
   "keywords": [],
   "author": "",
