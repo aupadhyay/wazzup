@@ -5,6 +5,12 @@ import readline from "node:readline";
 import Database from "better-sqlite3";
 import Anthropic from "@anthropic-ai/sdk";
 import { chat } from "./agent.js";
+import {
+  createChatSession,
+  updateChatSession,
+  getChatSession,
+  listChatSessions,
+} from "@thoughts/db";
 
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
@@ -24,12 +30,56 @@ function getDbPath(): string {
   return `${configPath()}/local.db`;
 }
 
-const dbPath = getDbPath();
-const db = new Database(dbPath, { readonly: true });
+function getFlag(name: string): string | undefined {
+  const idx = process.argv.indexOf(`--${name}`);
+  if (idx !== -1 && process.argv[idx + 1]) {
+    return process.argv[idx + 1];
+  }
+  return undefined;
+}
 
-const client = new Anthropic();
+function hasFlag(name: string): boolean {
+  return process.argv.includes(`--${name}`);
+}
 
-const systemPrompt = `You are a helpful assistant that answers questions about the user's thoughts and notes. You have access to a SQLite database containing their captured thoughts.
+async function handleList() {
+  const sessions = await listChatSessions();
+  if (sessions.length === 0) {
+    console.log("No saved sessions.");
+    return;
+  }
+  console.log("Chat sessions:\n");
+  for (const s of sessions) {
+    const msgs: Anthropic.MessageParam[] = JSON.parse(s.messages);
+    const userMsgs = msgs.filter((m) => m.role === "user");
+    const firstMsg = userMsgs[0];
+    let preview = "(empty)";
+    if (firstMsg) {
+      const content = firstMsg.content;
+      if (typeof content === "string") {
+        preview = content.slice(0, 80);
+      } else if (Array.isArray(content)) {
+        const textBlock = content.find((b) => b.type === "text");
+        if (textBlock && "text" in textBlock) {
+          preview = textBlock.text.slice(0, 80);
+        }
+      }
+    }
+    console.log(`  #${s.id}  ${s.updated_at}  (${userMsgs.length} messages)  ${preview}`);
+  }
+}
+
+async function main() {
+  if (hasFlag("list")) {
+    await handleList();
+    process.exit(0);
+  }
+
+  const dbPath = getDbPath();
+  const db = new Database(dbPath, { readonly: true });
+  const client = new Anthropic();
+
+  const systemPrompt = `You are a helpful assistant that answers questions about the user's thoughts and notes. You have access to a SQLite database containing their captured thoughts.
 
 ## Database Schema
 
@@ -58,39 +108,63 @@ The metadata (spotify, urls, location, focusedApp) captures what was happening i
 - If a query returns no results, suggest alternative approaches
 - Focus on thought content first. Only bring in metadata when it's specifically relevant to the question.`;
 
-const messages: Anthropic.MessageParam[] = [];
+  // Determine session: --session <id> or --resume <id> to load, otherwise create new
+  const sessionIdStr = getFlag("session") ?? getFlag("resume");
+  let sessionId: number;
+  let messages: Anthropic.MessageParam[];
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
-
-console.log("Chat with your thoughts. Type 'exit' or 'quit' to leave.\n");
-
-function prompt() {
-  rl.question("\x1b[36myou:\x1b[0m ", async (input) => {
-    const trimmed = input.trim();
-    if (!trimmed) {
-      prompt();
-      return;
+  if (sessionIdStr) {
+    sessionId = parseInt(sessionIdStr, 10);
+    const session = await getChatSession(sessionId);
+    if (!session) {
+      console.error(`Session #${sessionId} not found.`);
+      process.exit(1);
     }
-    if (trimmed === "exit" || trimmed === "quit") {
-      rl.close();
-      db.close();
-      process.exit(0);
-    }
+    messages = JSON.parse(session.messages);
+    console.log(`Resuming session #${sessionId} (${messages.filter((m) => m.role === "user").length} previous messages)`);
+  } else {
+    const session = await createChatSession();
+    sessionId = session.id;
+    messages = [];
+    console.log(`New session #${sessionId}`);
+  }
 
-    messages.push({ role: "user", content: trimmed });
+  console.log("Chat with your thoughts. Type 'exit' or 'quit' to leave.\n");
 
-    process.stdout.write("\x1b[33mclaude:\x1b[0m ");
-    try {
-      await chat(client, db, messages, systemPrompt);
-    } catch (err: any) {
-      console.error(`\n\x1b[31mError: ${err.message}\x1b[0m`);
-    }
-    console.log();
-    prompt();
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
   });
+
+  function prompt() {
+    rl.question("\x1b[36myou:\x1b[0m ", async (input) => {
+      const trimmed = input.trim();
+      if (!trimmed) {
+        prompt();
+        return;
+      }
+      if (trimmed === "exit" || trimmed === "quit") {
+        rl.close();
+        db.close();
+        process.exit(0);
+      }
+
+      messages.push({ role: "user", content: trimmed });
+
+      process.stdout.write("\x1b[33mclaude:\x1b[0m ");
+      try {
+        await chat(client, db, messages, systemPrompt);
+        // Persist messages after each completed turn
+        await updateChatSession(sessionId, JSON.stringify(messages));
+      } catch (err: any) {
+        console.error(`\n\x1b[31mError: ${err.message}\x1b[0m`);
+      }
+      console.log();
+      prompt();
+    });
+  }
+
+  prompt();
 }
 
-prompt();
+main();

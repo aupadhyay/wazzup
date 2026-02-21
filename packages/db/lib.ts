@@ -12,6 +12,7 @@ import {
   chunkThoughts,
   chunkEmbeddings,
   pipelineState,
+  chatSessions,
 } from "./schema"
 import { eq, or, like, isNull, desc, sql, lt, and, gt, asc } from "drizzle-orm"
 
@@ -351,4 +352,45 @@ export async function getThoughtsAfterId(afterId: number, limit?: number) {
 
 export async function getAllThoughtsOrdered() {
   return dbSingleton().select().from(thoughts).orderBy(asc(thoughts.id)).all()
+}
+
+// ============ Chat session operations ============
+
+export async function createChatSession(messages?: string) {
+  return dbSingleton()
+    .insert(chatSessions)
+    .values({ messages: messages ?? "[]" })
+    .returning()
+    .get()
+}
+
+export async function updateChatSession(id: number, messages: string) {
+  return dbSingleton()
+    .update(chatSessions)
+    .set({ messages, updated_at: sql`CURRENT_TIMESTAMP` })
+    .where(eq(chatSessions.id, id))
+    .run()
+}
+
+export async function getChatSession(id: number) {
+  return dbSingleton()
+    .select()
+    .from(chatSessions)
+    .where(eq(chatSessions.id, id))
+    .get()
+}
+
+export async function listChatSessions() {
+  return dbSingleton()
+    .select()
+    .from(chatSessions)
+    .orderBy(desc(chatSessions.updated_at))
+    .all()
+}
+
+export async function deleteChatSession(id: number) {
+  return dbSingleton()
+    .delete(chatSessions)
+    .where(eq(chatSessions.id, id))
+    .run()
 }

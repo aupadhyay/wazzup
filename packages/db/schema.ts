@@ -55,6 +55,18 @@ export const chunkEmbeddings = sqliteTable("chunk_embeddings", {
     .default(sql`CURRENT_TIMESTAMP`),
 })
 
+// Chat sessions for persisting conversation history
+export const chatSessions = sqliteTable("chat_sessions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  messages: text("messages").notNull(), // JSON: Anthropic.MessageParam[]
+  created_at: text("created_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+  updated_at: text("updated_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+})
+
 // Pipeline state tracking
 export const pipelineState = sqliteTable("pipeline_state", {
   key: text("key").primaryKey(),
