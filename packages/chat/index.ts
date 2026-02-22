@@ -4,13 +4,9 @@ import os from "node:os";
 import readline from "node:readline";
 import Database from "better-sqlite3";
 import Anthropic from "@anthropic-ai/sdk";
+import figlet from "figlet";
 import { chat } from "./agent.js";
-import {
-  createChatSession,
-  updateChatSession,
-  getChatSession,
-  listChatSessions,
-} from "@thoughts/db";
+import { createChatSession, updateChatSession, getChatSession, listChatSessions } from "@thoughts/db";
 
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
@@ -40,6 +36,15 @@ function getFlag(name: string): string | undefined {
 
 function hasFlag(name: string): boolean {
   return process.argv.includes(`--${name}`);
+}
+
+function printBanner() {
+  const text = figlet.textSync("wazzup", { font: "Big" });
+  const lines = text.split("\n");
+  const colors = ["\x1b[95m", "\x1b[35m", "\x1b[34m", "\x1b[94m", "\x1b[36m", "\x1b[96m", "\x1b[96m"];
+  const colored = lines.map((line, i) => `${colors[i % colors.length]}${line}\x1b[0m`).join("\n");
+  console.log(colored);
+  console.log("\x1b[2m  chat with your thoughts.\x1b[0m\n");
 }
 
 async function handleList() {
@@ -98,6 +103,7 @@ The main table storing captured thoughts.
 The metadata (spotify, urls, location, focusedApp) captures what was happening in the background when a thought was recorded. It does NOT mean the thought is about that song, website, or place. The thought text is always the primary focus. Only use metadata to answer questions when the user specifically asks about it (e.g. "what was I listening to?", "where was I when...", "what sites was I on?"). Never assume a thought is related to its metadata unless the content itself makes that connection.
 
 ## Guidelines
+- This is a conversation. Please don't use emojis. Treat this like texts with a friend. Use lowercase.
 - Do not rely on the ID as a way to track timing of the thought. Always use the timestamp column instead. If you just do SELECT * FROM thoughts LIMIT 20, you CANNOT assume these are the 20 most recent thoughts.
 - Always use LIMIT to avoid returning too many rows (default to 20 unless the user wants more)
 - Use json_extract() to query inside the metadata JSON column. Example: json_extract(metadata, '$.spotify.track')
@@ -108,20 +114,24 @@ The metadata (spotify, urls, location, focusedApp) captures what was happening i
 - If a query returns no results, suggest alternative approaches
 - Focus on thought content first. Only bring in metadata when it's specifically relevant to the question.`;
 
+  printBanner();
+
   // Determine session: --session <id> or --resume <id> to load, otherwise create new
   const sessionIdStr = getFlag("session") ?? getFlag("resume");
   let sessionId: number;
   let messages: Anthropic.MessageParam[];
 
   if (sessionIdStr) {
-    sessionId = parseInt(sessionIdStr, 10);
+    sessionId = Number.parseInt(sessionIdStr, 10);
     const session = await getChatSession(sessionId);
     if (!session) {
       console.error(`Session #${sessionId} not found.`);
       process.exit(1);
     }
     messages = JSON.parse(session.messages);
-    console.log(`Resuming session #${sessionId} (${messages.filter((m) => m.role === "user").length} previous messages)`);
+    console.log(
+      `Resuming session #${sessionId} (${messages.filter((m) => m.role === "user").length} previous messages)`,
+    );
   } else {
     const session = await createChatSession();
     sessionId = session.id;
@@ -129,7 +139,7 @@ The metadata (spotify, urls, location, focusedApp) captures what was happening i
     console.log(`New session #${sessionId}`);
   }
 
-  console.log("Chat with your thoughts. Type 'exit' or 'quit' to leave.\n");
+  console.log("\x1b[2mtype 'exit' or 'quit' to leave.\x1b[0m\n");
 
   const rl = readline.createInterface({
     input: process.stdin,

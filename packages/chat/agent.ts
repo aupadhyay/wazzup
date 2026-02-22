@@ -1,5 +1,11 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type Database from "better-sqlite3";
+import { marked } from "marked";
+import TerminalRenderer from "marked-terminal";
+
+marked.setOptions({
+  renderer: new TerminalRenderer() as any,
+});
 
 const TOOL_NAME = "query_database";
 
@@ -122,15 +128,14 @@ export async function chat(
           toolInputBuffers.set(event.index, "");
         }
       } else if (event.type === "content_block_delta") {
-        if (event.delta.type === "text_delta") {
-          process.stdout.write(event.delta.text);
-          const block = contentBlocks[event.index];
-          if (block && block.type === "text") {
-            block.text += event.delta.text;
-          }
-        } else if (event.delta.type === "input_json_delta") {
+        if (event.delta.type === "input_json_delta") {
           const buf = toolInputBuffers.get(event.index) ?? "";
           toolInputBuffers.set(event.index, buf + event.delta.partial_json);
+        }
+      } else if (event.type === "content_block_stop") {
+        const block = contentBlocks[event.index];
+        if (block && block.type === "text" && block.text) {
+          process.stdout.write((marked(block.text) as string).trimEnd());
         }
       } else if (event.type === "message_delta") {
         stopReason = event.delta.stop_reason;
