@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
 import path from "node:path";
 import os from "node:os";
-import readline from "node:readline";
 import Database from "better-sqlite3";
 import Anthropic from "@anthropic-ai/sdk";
 import figlet from "figlet";
@@ -84,7 +83,9 @@ async function main() {
   const db = new Database(dbPath, { readonly: true });
   const client = new Anthropic();
 
-  const systemPrompt = `You are a helpful assistant that answers questions about the user's thoughts and notes. You have access to a SQLite database containing their captured thoughts.
+  const currentDate = new Date().toISOString().split("T")[0];
+
+  const systemPrompt = `You are a helpful assistant that answers questions about the user's thoughts and notes. You have access to a SQLite database containing their captured thoughts. Today's date is ${currentDate}.
 
 ## Database Schema
 
@@ -139,22 +140,107 @@ The metadata (spotify, urls, location, focusedApp) captures what was happening i
     console.log(`New session #${sessionId}`);
   }
 
-  console.log("\x1b[2mtype 'exit' or 'quit' to leave.\x1b[0m\n");
+  console.log("\x1b[2mpress enter twice to send. type 'exit' or 'quit' to leave.\x1b[0m\n");
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  function readMultilineInput(): Promise<string> {
+    return new Promise((resolve) => {
+      process.stdout.write("\x1b[36myou:\x1b[0m ");
+      const lines: string[] = [];
+      let currentLine = "";
+      let lastLineWasEmpty = false;
 
-  function prompt() {
-    rl.question("\x1b[36myou:\x1b[0m ", async (input) => {
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      process.stdin.setEncoding("utf8");
+
+      const onData = (key: string) => {
+        // Ctrl+C
+        if (key === "\x03") {
+          process.stdout.write("\n");
+          process.stdin.setRawMode(false);
+          process.stdin.removeListener("data", onData);
+          db.close();
+          process.exit(0);
+        }
+
+        // Ctrl+D
+        if (key === "\x04") {
+          process.stdout.write("\n");
+          process.stdin.setRawMode(false);
+          process.stdin.removeListener("data", onData);
+          db.close();
+          process.exit(0);
+        }
+
+        // Backspace
+        if (key === "\x7f" || key === "\b") {
+          if (currentLine.length > 0) {
+            currentLine = currentLine.slice(0, -1);
+            process.stdout.write("\b \b");
+          }
+          return;
+        }
+
+        // Enter / Return
+        if (key === "\r" || key === "\n") {
+          process.stdout.write("\n");
+          if (currentLine === "" && lastLineWasEmpty && lines.length > 0) {
+            // Double enter on non-empty input — submit
+            // Remove the trailing empty line we pushed
+            lines.pop();
+            process.stdin.setRawMode(false);
+            process.stdin.removeListener("data", onData);
+            process.stdin.pause();
+            resolve(lines.join("\n"));
+            return;
+          }
+          lastLineWasEmpty = currentLine === "";
+          lines.push(currentLine);
+          currentLine = "";
+          if (lines.length > 0 && lines.some((l) => l.trim() !== "")) {
+            process.stdout.write("\x1b[2m ...\x1b[0m ");
+          }
+          return;
+        }
+
+        // Handle pasted text that may contain newlines
+        if (key.includes("\n") || key.includes("\r")) {
+          const parts = key.split(/\r\n|\r|\n/);
+          for (let i = 0; i < parts.length; i++) {
+            currentLine += parts[i];
+            if (i < parts.length - 1) {
+              process.stdout.write(parts[i] + "\n");
+              lines.push(currentLine);
+              currentLine = "";
+              lastLineWasEmpty = false;
+              if (lines.length > 0) {
+                process.stdout.write("\x1b[2m ...\x1b[0m ");
+              }
+            }
+          }
+          // Write remaining partial line
+          if (currentLine) {
+            process.stdout.write(currentLine);
+          }
+          return;
+        }
+
+        // Regular character
+        lastLineWasEmpty = false;
+        currentLine += key;
+        process.stdout.write(key);
+      };
+
+      process.stdin.on("data", onData);
+    });
+  }
+
+  async function runLoop() {
+    while (true) {
+      const input = await readMultilineInput();
       const trimmed = input.trim();
-      if (!trimmed) {
-        prompt();
-        return;
-      }
+      if (!trimmed) continue;
       if (trimmed === "exit" || trimmed === "quit") {
-        rl.close();
         db.close();
         process.exit(0);
       }
@@ -164,17 +250,15 @@ The metadata (spotify, urls, location, focusedApp) captures what was happening i
       process.stdout.write("\x1b[33mclaude:\x1b[0m ");
       try {
         await chat(client, db, messages, systemPrompt);
-        // Persist messages after each completed turn
         await updateChatSession(sessionId, JSON.stringify(messages));
       } catch (err: any) {
         console.error(`\n\x1b[31mError: ${err.message}\x1b[0m`);
       }
       console.log();
-      prompt();
-    });
+    }
   }
 
-  prompt();
+  runLoop();
 }
 
 main();

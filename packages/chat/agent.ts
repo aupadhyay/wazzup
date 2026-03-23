@@ -97,6 +97,46 @@ function executeQuery(db: Database.Database, sql: string): string {
   }
 }
 
+const MAX_RETRIES = 5;
+const BASE_DELAY_MS = 2000;
+
+function isRateLimitError(err: any): boolean {
+  return err?.status === 429 || err?.error?.type === "rate_limit_error";
+}
+
+function getRetryDelay(err: any, attempt: number): number {
+  const retryAfter = err?.headers?.["retry-after"];
+  if (retryAfter) return Number(retryAfter) * 1000;
+  return BASE_DELAY_MS * 2 ** attempt;
+}
+
+async function streamWithRetry(
+  client: Anthropic,
+  params: Omit<Anthropic.MessageCreateParamsStreaming, "stream">,
+  onEvent: (event: any) => void,
+): Promise<void> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const stream = client.messages.stream(params);
+      for await (const event of stream) {
+        onEvent(event);
+      }
+      return;
+    } catch (err: any) {
+      if (isRateLimitError(err) && attempt < MAX_RETRIES) {
+        const delay = getRetryDelay(err, attempt);
+        process.stdout.write(
+          `\x1b[2m(rate limited, retrying in ${Math.round(delay / 1000)}s...)\x1b[0m\n`,
+        );
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
+
 export async function chat(
   client: Anthropic,
   db: Database.Database,
@@ -111,36 +151,38 @@ export async function chat(
     // Track tool use input JSON assembly
     const toolInputBuffers: Map<number, string> = new Map();
 
-    const stream = client.messages.stream({
-      model: "claude-sonnet-4-5-20250929",
-      max_tokens: 4096,
-      system: systemPrompt,
-      tools,
-      messages,
-    });
-
-    for await (const event of stream) {
-      if (event.type === "content_block_start") {
-        if (event.content_block.type === "text") {
-          contentBlocks[event.index] = event.content_block;
-        } else if (event.content_block.type === "tool_use") {
-          contentBlocks[event.index] = event.content_block;
-          toolInputBuffers.set(event.index, "");
+    await streamWithRetry(
+      client,
+      {
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 4096,
+        system: systemPrompt,
+        tools,
+        messages,
+      },
+      (event) => {
+        if (event.type === "content_block_start") {
+          if (event.content_block.type === "text") {
+            contentBlocks[event.index] = event.content_block;
+          } else if (event.content_block.type === "tool_use") {
+            contentBlocks[event.index] = event.content_block;
+            toolInputBuffers.set(event.index, "");
+          }
+        } else if (event.type === "content_block_delta") {
+          if (event.delta.type === "input_json_delta") {
+            const buf = toolInputBuffers.get(event.index) ?? "";
+            toolInputBuffers.set(event.index, buf + event.delta.partial_json);
+          }
+        } else if (event.type === "content_block_stop") {
+          const block = contentBlocks[event.index];
+          if (block && block.type === "text" && block.text) {
+            process.stdout.write((marked(block.text) as string).trimEnd());
+          }
+        } else if (event.type === "message_delta") {
+          stopReason = event.delta.stop_reason;
         }
-      } else if (event.type === "content_block_delta") {
-        if (event.delta.type === "input_json_delta") {
-          const buf = toolInputBuffers.get(event.index) ?? "";
-          toolInputBuffers.set(event.index, buf + event.delta.partial_json);
-        }
-      } else if (event.type === "content_block_stop") {
-        const block = contentBlocks[event.index];
-        if (block && block.type === "text" && block.text) {
-          process.stdout.write((marked(block.text) as string).trimEnd());
-        }
-      } else if (event.type === "message_delta") {
-        stopReason = event.delta.stop_reason;
-      }
-    }
+      },
+    );
 
     // Finalize tool_use blocks with parsed input
     for (const [index, jsonStr] of toolInputBuffers) {
