@@ -2,6 +2,8 @@
 
 a lightweight macOS application for quickly capturing thoughts. like raycast but for your thoughts. attaches system context. might do some other stuff later.
 
+![demo gif](wazzup.gif)
+
 ## features
 
 - floating cloudy window interface, write down wazzup
