@@ -1,3 +1,5 @@
+if application "Spotify" is not running then error "Spotify is not running"
+
 tell application "Spotify"
     if player state is playing then
         set currentTrack to the current track

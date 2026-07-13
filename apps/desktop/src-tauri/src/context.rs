@@ -1,3 +1,4 @@
+use std::io;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -14,13 +15,37 @@ fn run_script(script_path: &PathBuf) -> Result<String, tauri::Error> {
         .arg(script_path)
         .output()
         .map_err(|e| tauri::Error::Io(e))?;
+
+    if !output.status.success() {
+        return Err(tauri::Error::Io(io::Error::new(
+            io::ErrorKind::Other,
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        )));
+    }
+
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn run_app_script(app_process_name: &str, script_path: &PathBuf) -> Result<String, tauri::Error> {
+    let status = Command::new("/usr/bin/pgrep")
+        .args(["-x", app_process_name])
+        .status()
+        .map_err(tauri::Error::Io)?;
+
+    if !status.success() {
+        return Err(tauri::Error::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{app_process_name} is not running"),
+        )));
+    }
+
+    run_script(script_path)
 }
 
 #[tauri::command]
 pub fn active_arc_url() -> Result<String, tauri::Error> {
     let script_path = get_script_path("get_arc_url.applescript");
-    run_script(&script_path)
+    run_app_script("Arc", &script_path)
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -75,7 +100,7 @@ pub struct LocationInfo {
 #[tauri::command]
 pub fn get_spotify_track() -> Result<SpotifyTrackInfo, tauri::Error> {
     let script_path = get_script_path("get_spotify_track.applescript");
-    let output_str = run_script(&script_path)?;
+    let output_str = run_app_script("Spotify", &script_path)?;
 
     let track_info: SpotifyTrackInfo = serde_json::from_str(&output_str)?;
 
