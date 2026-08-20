@@ -1,5 +1,5 @@
 use colored::Colorize;
-use std::{env, str::FromStr, sync::Mutex};
+use std::{str::FromStr, sync::Mutex};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -126,13 +126,8 @@ fn main() {
     // Determine if we're in dev mode
     let is_dev = cfg!(debug_assertions);
 
-    // Read sidecar port from environment variable, default to 4318
-    let sidecar_port: u16 = env::var("SIDECAR_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(4318);
-
-    let config = Config::new(sidecar_port).expect("Failed to initialize config");
+    let config = Config::new().expect("Failed to initialize config");
+    let sidecar_port = config.get_port();
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
