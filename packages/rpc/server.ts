@@ -10,6 +10,7 @@ logger.init()
 // Capture uncaught exceptions
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err.message, err.stack)
+  logger.close()
   process.exit(1)
 })
 
