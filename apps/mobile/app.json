@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Thoughts",
+    "slug": "thoughts",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.thoughts.mobile",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Face ID unlocks your sudo (personal) thoughts.",
+        "NSLocationWhenInUseUsageDescription": "Location is attached as context to captured thoughts."
+      }
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-local-authentication",
+      "expo-location",
+      "expo-sqlite"
+    ]
+  }
+}
