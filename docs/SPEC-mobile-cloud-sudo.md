@@ -1,6 +1,6 @@
 # Spec: Mobile App, Cloud Sync, and Sudo Mode
 
-Status: **Draft — for review before implementation** (rev 2: Postgres for cloud, sudo notes sync everywhere, classification from list view)
+Status: **Draft — for review before implementation** (rev 3: sudo toggle available at capture time too)
 
 This spec covers three connected features:
 
@@ -135,7 +135,7 @@ New workspace: **`apps/mobile`** (Expo + TypeScript + tRPC client + TanStack Que
 
 ### Screens (v1)
 
-1. **Capture** (default screen, opens to keyboard-up) — the mobile equivalent of the quick panel. Text input, context badges, save. Mobile context: location (`expo-location`, reuses the existing metadata JSON shape), device name; clipboard-URL suggestion as a badge.
+1. **Capture** (default screen, opens to keyboard-up) — the mobile equivalent of the quick panel. Text input, context badges, a lock toggle to capture as sudo, save. Mobile context: location (`expo-location`, reuses the existing metadata JSON shape), device name; clipboard-URL suggestion as a badge.
 2. **Browse/Search** — paginated list (mirrors `getThoughtsPaginated`), search box, metadata badges. A **sudo toggle** in the search bar and a "mark as sudo" action on list items (Part 3).
 3. **Settings** — pairing (scan a QR code shown by desktop / paste device token), sudo enrollment, sync status.
 
@@ -156,7 +156,7 @@ Personal use: EAS Build + TestFlight internal distribution (requires an Apple De
 ### Requirements restated
 
 - Two levels: **standard** and **sudo** (personal).
-- Thoughts are **never sudo at capture time**. The workflow is: capture normally, then later mark thoughts as sudo from the list view (desktop or mobile).
+- The primary workflow is: capture normally, then later mark thoughts as sudo from the list view (desktop or mobile). A capture-time lock toggle also exists for when you already know a thought is personal.
 - Sudo thoughts are invisible to browse, keyword search, semantic search, and the chat agent — everywhere — unless a sudo session is active.
 - Entering sudo mode requires **Face ID on iOS** and **Touch ID on Mac**. Not a password prompt, actual biometrics.
 
@@ -194,10 +194,10 @@ Client-side filtering would be theater — anyone with the device token could qu
 
 Note `kSecAccessControlBiometryCurrentSet` means re-enrollment is required if fingerprints/face data change — that's the desired behavior (a newly added fingerprint can't unlock existing sudo access).
 
-### Classification UX (list view, not capture)
+### Classification UX
 
-- Capture UIs are untouched — there is no sudo affordance at write time.
-- List view (desktop main window and mobile browse) gets a **"mark as sudo"** action per thought. New procedure: `setThoughtAccessLevel(uuid, level)`, synced like any other write.
+- **List view** (desktop main window and mobile browse) gets a **"mark as sudo"** action per thought. New procedure: `setThoughtAccessLevel(uuid, level)`, synced like any other write.
+- **Capture time**: the quick panel (`⌘L`) and mobile capture screen get a lock toggle that sets `access_level: 'sudo'` on `createThought` directly. This works because marking sudo needs no elevation — no biometric prompt interrupts the capture flow, the thought is simply born hidden. The toggle always resets to off for the next capture (no sticky state to accidentally leave on — or rather, leave *off* — for the next thought).
 - **Marking standard → sudo requires no elevation** (making something *more* private is always safe). The thought disappears from default views immediately.
 - **Unmarking sudo → standard requires an active sudo session** (you can't reveal what you can't see).
 - Once marked sudo, the thought's `edit_operations` replay is sudo-gated too (`getEditOperations` joins through to the thought's access level).
@@ -220,14 +220,14 @@ Each milestone is a separate PR, independently shippable:
 | 3 | **Desktop sync engine** | Sync module in sidecar, config for cloud URL + token, QR pairing screen in settings |
 | 4 | **Pipeline to cloud** | Embedding pipeline as cloud cron writing pgvector rows; `searchSemantic` procedure; sudo-reclassification reconciliation |
 | 5 | **Mobile app MVP** | `apps/mobile` Expo app: capture, browse/search, pairing, offline outbox + full local cache, EAS config |
-| 6 | **Sudo mode** | Keypair enrollment (Mac Rust bridge + iOS secure store), `sudo.elevate` + local elevation, JWT/session middleware, `setThoughtAccessLevel` + list-view actions, sudo search toggle, countdown pill |
+| 6 | **Sudo mode** | Keypair enrollment (Mac Rust bridge + iOS secure store), `sudo.elevate` + local elevation, JWT/session middleware, `setThoughtAccessLevel` + list-view actions, capture-time lock toggle (`⌘L` / mobile), sudo search toggle, countdown pill |
 | 7 | *(v2, optional)* | Application-level encryption for sudo notes, sudo-tier semantic index, share extension, Android |
 
 ## Decisions ratified so far
 
 1. **Postgres (Neon) + pgvector** for the cloud DB; SQLite stays on devices as the offline cache. (rev 2 — was SQLite-on-Fly-volume)
 2. **Sudo notes sync to all devices**; enforcement is at the query layer everywhere, at-rest protection is platform disk encryption. (rev 2 — was "mobile never persists sudo")
-3. **Classification happens in list view only**; capture has no sudo affordance. Standard→sudo is free; sudo→standard and reading require biometric elevation. (rev 2)
+3. **Classification from list view or capture-time lock toggle.** Standard→sudo is free (no biometric prompt, even at capture); sudo→standard and reading require biometric elevation. (rev 3)
 4. **Fly.io** hosts the app service; swappable, nothing Fly-specific in the code.
 5. **5-minute sudo TTL**, in-memory only.
 6. **Existing notes** backfill as `standard`.
