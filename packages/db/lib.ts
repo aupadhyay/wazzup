@@ -4,6 +4,7 @@ import os from "node:os"
 
 dotenv.config({ path: path.resolve(__dirname, "../../.env") })
 
+import { randomUUID } from "node:crypto"
 import { drizzle } from "drizzle-orm/better-sqlite3"
 import {
   thoughts,
@@ -13,8 +14,10 @@ import {
   chunkEmbeddings,
   pipelineState,
   chatSessions,
+  syncState,
 } from "./schema"
-import { eq, or, like, isNull, desc, sql, lt, and, gt, asc } from "drizzle-orm"
+import { eq, or, like, isNull, desc, sql, lt, and, gt, asc, inArray } from "drizzle-orm"
+import type { AccessLevel, ThoughtWire, EditOperationWire } from "./wire"
 
 export function configPath() {
   if (!process.env.THOUGHTS_CONFIG_PATH) {
@@ -35,97 +38,125 @@ function dbSingleton() {
   return db
 }
 
-export async function createThought(content: string, metadata?: string | null) {
+// Sudo enforcement lives here at the query layer, not in the UI.
+// Every read defaults to standard-tier; callers opt in to sudo rows only
+// when the request context carries a valid sudo session.
+function visibilityFilter(includeSudo: boolean) {
+  return includeSudo
+    ? isNull(thoughts.deleted_at_ms)
+    : and(eq(thoughts.access_level, "standard"), isNull(thoughts.deleted_at_ms))
+}
+
+export async function createThought(
+  content: string,
+  metadata?: string | null,
+  options?: { accessLevel?: AccessLevel; originDevice?: string | null }
+) {
   return dbSingleton()
     .insert(thoughts)
-    .values({ content, metadata: metadata ?? null })
+    .values({
+      content,
+      metadata: metadata ?? null,
+      uuid: randomUUID(),
+      access_level: options?.accessLevel ?? "standard",
+      updated_at_ms: Date.now(),
+      origin_device: options?.originDevice ?? null,
+    })
     .returning()
     .get()
 }
 
-export async function getThoughts(search?: string) {
-  const query = dbSingleton().select().from(thoughts)
-
-  if (search?.trim()) {
-    const searchTerm = `%${search.trim()}%`
-    query.where(
-      or(
-        like(thoughts.content, searchTerm),
-        like(thoughts.metadata, searchTerm)
+export async function getThoughts(search?: string, includeSudo = false) {
+  const searchCondition = search?.trim()
+    ? or(
+        like(thoughts.content, `%${search.trim()}%`),
+        like(thoughts.metadata, `%${search.trim()}%`)
       )
-    )
-  }
+    : undefined
 
-  return query.orderBy(thoughts.timestamp).all()
+  return dbSingleton()
+    .select()
+    .from(thoughts)
+    .where(
+      searchCondition
+        ? and(visibilityFilter(includeSudo), searchCondition)
+        : visibilityFilter(includeSudo)
+    )
+    .orderBy(thoughts.timestamp)
+    .all()
 }
 
 export async function getThoughtsPaginated(
   limit = 20,
   cursor?: number,
-  search?: string
+  search?: string,
+  includeSudo = false
 ) {
-  // Build base query with LEFT JOIN to count edit operations
-  let query = dbSingleton()
+  const conditions = [
+    visibilityFilter(includeSudo),
+    ...(cursor ? [lt(thoughts.id, cursor)] : []),
+    ...(search?.trim()
+      ? [
+          or(
+            like(thoughts.content, `%${search.trim()}%`),
+            like(thoughts.metadata, `%${search.trim()}%`)
+          ),
+        ]
+      : []),
+  ]
+
+  const results = dbSingleton()
     .select({
       id: thoughts.id,
+      uuid: thoughts.uuid,
       content: thoughts.content,
       metadata: thoughts.metadata,
       timestamp: thoughts.timestamp,
+      access_level: thoughts.access_level,
       editCount: sql<number>`COUNT(DISTINCT ${editOperations.id})`.as(
         "edit_count"
       ),
     })
     .from(thoughts)
     .leftJoin(editOperations, eq(editOperations.thought_id, thoughts.id))
+    .where(and(...conditions))
     .groupBy(thoughts.id)
     .orderBy(desc(thoughts.id)) // Newest first
     .limit(limit + 1) // Fetch one extra to determine if there's a next page
+    .all()
 
-  // Build WHERE conditions
-  const conditions = []
-
-  // Apply cursor filter
-  if (cursor) {
-    conditions.push(lt(thoughts.id, cursor))
-  }
-
-  // Apply search filter
-  if (search?.trim()) {
-    const searchTerm = `%${search.trim()}%`
-    conditions.push(
-      or(
-        like(thoughts.content, searchTerm),
-        like(thoughts.metadata, searchTerm)
-      )
-    )
-  }
-
-  // Combine conditions with AND
-  if (conditions.length > 0) {
-    query = query.where(
-      conditions.length === 1 ? conditions[0] : and(...conditions)
-    ) as typeof query
-  }
-
-  // Execute query
-  const results = query.all()
   const hasMore = results.length > limit
   const items = hasMore ? results.slice(0, limit) : results
 
   return {
     items: items.map((row) => ({
       id: row.id,
+      uuid: row.uuid,
       content: row.content,
       metadata: row.metadata,
       timestamp: row.timestamp,
+      accessLevel: row.access_level as AccessLevel,
       hasEditHistory: row.editCount > 0,
     })),
     nextCursor: hasMore ? items[items.length - 1].id : undefined,
   }
 }
 
-export async function getThoughtById(id: number) {
-  return dbSingleton().select().from(thoughts).where(eq(thoughts.id, id)).get()
+export async function getThoughtById(id: number, includeSudo = false) {
+  return dbSingleton()
+    .select()
+    .from(thoughts)
+    .where(and(eq(thoughts.id, id), visibilityFilter(includeSudo)))
+    .get()
+}
+
+export async function setThoughtAccessLevel(uuid: string, level: AccessLevel) {
+  return dbSingleton()
+    .update(thoughts)
+    .set({ access_level: level, updated_at_ms: Date.now() })
+    .where(eq(thoughts.uuid, uuid))
+    .returning()
+    .get()
 }
 
 export async function createEditOperation(
@@ -151,7 +182,11 @@ export async function createEditOperation(
     .get()
 }
 
-export async function getEditOperations(thought_id: number) {
+export async function getEditOperations(thought_id: number, includeSudo = false) {
+  // Replay of a sudo thought's keystrokes is gated like the thought itself.
+  const parent = await getThoughtById(thought_id, includeSudo)
+  if (!parent) return []
+
   return dbSingleton()
     .select()
     .from(editOperations)
@@ -393,4 +428,150 @@ export async function deleteChatSession(id: number) {
     .delete(chatSessions)
     .where(eq(chatSessions.id, id))
     .run()
+}
+
+// ============ Sync state (client-side cursors) ============
+
+export async function getSyncState(key: string): Promise<string | null> {
+  const result = dbSingleton()
+    .select()
+    .from(syncState)
+    .where(eq(syncState.key, key))
+    .get()
+  return result?.value ?? null
+}
+
+export async function setSyncState(key: string, value: string) {
+  return dbSingleton()
+    .insert(syncState)
+    .values({ key, value })
+    .onConflictDoUpdate({ target: syncState.key, set: { value } })
+    .run()
+}
+
+// ============ Sync helpers (push/pull, see docs/SPEC-mobile-cloud-sudo.md) ============
+
+function toThoughtWire(row: typeof thoughts.$inferSelect): ThoughtWire {
+  return {
+    uuid: row.uuid,
+    content: row.content,
+    metadata: row.metadata,
+    timestamp: row.timestamp,
+    access_level: row.access_level as AccessLevel,
+    updated_at_ms: row.updated_at_ms,
+    deleted_at_ms: row.deleted_at_ms,
+    origin_device: row.origin_device,
+  }
+}
+
+// Rows to push to the cloud: everything (incl. sudo and tombstones) written
+// after the push cursor. Push is idempotent server-side, so retries are safe.
+export async function getThoughtsUpdatedSince(sinceMs: number): Promise<ThoughtWire[]> {
+  return dbSingleton()
+    .select()
+    .from(thoughts)
+    .where(gt(thoughts.updated_at_ms, sinceMs))
+    .orderBy(asc(thoughts.updated_at_ms))
+    .all()
+    .map(toThoughtWire)
+}
+
+export async function getEditOperationsByThoughtUuids(
+  uuids: string[]
+): Promise<EditOperationWire[]> {
+  if (uuids.length === 0) return []
+  return dbSingleton()
+    .select({
+      thought_uuid: thoughts.uuid,
+      sequence_num: editOperations.sequence_num,
+      operation_type: editOperations.operation_type,
+      position: editOperations.position,
+      content: editOperations.content,
+      content_length: editOperations.content_length,
+      timestamp_ms: editOperations.timestamp_ms,
+    })
+    .from(editOperations)
+    .innerJoin(thoughts, eq(editOperations.thought_id, thoughts.id))
+    .where(inArray(thoughts.uuid, uuids))
+    .all()
+}
+
+// Apply a pulled thought locally. Last-write-wins on updated_at_ms.
+export async function upsertSyncedThought(wire: ThoughtWire) {
+  const db = dbSingleton()
+  const existing = db
+    .select()
+    .from(thoughts)
+    .where(eq(thoughts.uuid, wire.uuid))
+    .get()
+
+  if (!existing) {
+    return db
+      .insert(thoughts)
+      .values({
+        uuid: wire.uuid,
+        content: wire.content,
+        metadata: wire.metadata,
+        timestamp: wire.timestamp,
+        access_level: wire.access_level,
+        updated_at_ms: wire.updated_at_ms,
+        deleted_at_ms: wire.deleted_at_ms,
+        origin_device: wire.origin_device,
+      })
+      .returning()
+      .get()
+  }
+
+  if (wire.updated_at_ms <= existing.updated_at_ms) return existing
+
+  return db
+    .update(thoughts)
+    .set({
+      content: wire.content,
+      metadata: wire.metadata,
+      access_level: wire.access_level,
+      updated_at_ms: wire.updated_at_ms,
+      deleted_at_ms: wire.deleted_at_ms,
+    })
+    .where(eq(thoughts.uuid, wire.uuid))
+    .returning()
+    .get()
+}
+
+// Apply a pulled edit operation. Keyed by (thought_uuid, sequence_num);
+// edit operations are immutable so an existing row wins.
+export async function upsertSyncedEditOperation(wire: EditOperationWire) {
+  const db = dbSingleton()
+  const parent = db
+    .select({ id: thoughts.id })
+    .from(thoughts)
+    .where(eq(thoughts.uuid, wire.thought_uuid))
+    .get()
+  if (!parent) return null
+
+  const existing = db
+    .select()
+    .from(editOperations)
+    .where(
+      and(
+        eq(editOperations.thought_id, parent.id),
+        eq(editOperations.sequence_num, wire.sequence_num)
+      )
+    )
+    .get()
+  if (existing) return existing
+
+  return db
+    .insert(editOperations)
+    .values({
+      thought_id: parent.id,
+      sequence_num: wire.sequence_num,
+      operation_type: wire.operation_type,
+      position: wire.position,
+      content: wire.content,
+      content_length: wire.content_length,
+      timestamp_ms: wire.timestamp_ms,
+    })
+    .returning()
+    .get()
 }
