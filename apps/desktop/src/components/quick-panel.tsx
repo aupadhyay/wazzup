@@ -125,7 +125,7 @@ export function QuickPanel() {
   const fetchContextInfo = async () => {
     const [url, spotifyInfo, focusedAppInfo, locationInfo] =
       await Promise.allSettled([
-        invoke<string>("active_arc_url"),
+        invoke<string>("active_browser_url"),
         invoke<SpotifyTrackInfo>("get_spotify_track"),
         invoke<FocusedAppInfo>("get_focused_app"),
         invoke<LocationInfo>("get_location"),
