@@ -1,0 +1,3 @@
+name: thoughts-infra
+runtime: nodejs
+description: Self-hosted infra for the Thoughts cloud service (one Hetzner VM)

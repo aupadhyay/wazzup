@@ -1,5 +1,7 @@
 # Build from the repo root so workspace deps resolve:
-#   flyctl deploy -c packages/cloud/fly.toml --dockerfile packages/cloud/Dockerfile .
+#   docker build -f packages/cloud/Dockerfile -t thoughts-cloud .
+# Built + pushed to GHCR by .github/workflows/deploy-cloud.yml and run on the
+# self-hosted VM via infra/deploy/docker-compose.yml.
 FROM node:22-slim
 
 RUN corepack enable
