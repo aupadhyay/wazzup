@@ -3,6 +3,7 @@ import net from "node:net"
 import { createHTTPHandler } from "@trpc/server/adapters/standalone"
 import { buildRouter } from "./index"
 import * as logger from "./logger"
+import { startSyncLoop } from "./sync"
 
 // Initialize logger (captures console.log/warn/error, handles rotation and cleanup)
 logger.init()
@@ -124,10 +125,12 @@ async function listenWithFallback(ports: number[]): Promise<void> {
 }
 
 console.log("Starting server...")
-void listenWithFallback(sidecarPortCandidates()).catch((err) => {
-  console.error("Failed to start sidecar:", err)
-  process.exit(1)
-})
+void listenWithFallback(sidecarPortCandidates())
+  .then(() => startSyncLoop())
+  .catch((err) => {
+    console.error("Failed to start sidecar:", err)
+    process.exit(1)
+  })
 
 const shutdown = () => {
   console.log("\nShutting down server...")
