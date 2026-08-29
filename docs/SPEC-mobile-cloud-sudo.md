@@ -1,6 +1,6 @@
 # Spec: Mobile App, Cloud Sync, and Sudo Mode
 
-Status: **Draft — for review before implementation**
+Status: **Draft — for review before implementation** (rev 2: Postgres for cloud, sudo notes sync everywhere, classification from list view)
 
 This spec covers three connected features:
 
@@ -17,7 +17,7 @@ Build order is deliberately: cloud first, then mobile, then sudo. Mobile is usel
 - **Desktop**: Tauri v2 app (`apps/desktop`). React frontend talks to a local tRPC sidecar (`packages/rpc`) over `http://localhost:<port>`.
 - **Data**: SQLite at `~/.thoughts/local.db` via Drizzle (`packages/db`). Tables: `thoughts`, `edit_operations`, `chunks`, `chunk_thoughts`, `chunk_embeddings`, `chat_sessions`, `pipeline_state`.
 - **Write pattern**: thoughts are append-only (content is captured once; `edit_operations` records keystrokes for replay). This makes sync dramatically simpler — there is almost no conflict surface.
-- **Derived data**: a pipeline extracts `chunks` from thoughts and embeds them for semantic search. Sudo mode must account for this — hiding a thought while leaking its chunks/embeddings would defeat the purpose.
+- **Derived data**: a pipeline extracts `chunks` from thoughts and embeds them for semantic search. Embeddings are currently stored as JSON-stringified arrays in SQLite with similarity computed in application code — this moves to proper vector search in the cloud (see below).
 - **API surface today**: `createThought`, `getThoughts`, `getThoughtsPaginated`, plus edit-operation CRUD. No auth anywhere (fine locally, not fine in the cloud).
 
 ---
@@ -33,78 +33,90 @@ Build order is deliberately: cloud first, then mobile, then sudo. Mobile is usel
 ### Architecture decision: hub-and-spoke, cloud is source of truth
 
 ```
-┌──────────────┐        ┌─────────────────────────┐        ┌──────────────┐
-│  Desktop      │        │  Cloud (Fly.io)          │        │  Mobile       │
-│  local SQLite │◄─sync─►│  tRPC server + SQLite    │◄─sync─►│  local SQLite │
-│  (full copy)  │        │  (source of truth)       │        │  (std cache)  │
-└──────────────┘        │  Litestream → R2 backup  │        └──────────────┘
-                         └─────────────────────────┘
+┌──────────────┐        ┌──────────────────────────┐        ┌──────────────┐
+│  Desktop      │        │  Cloud                    │        │  Mobile       │
+│  local SQLite │◄─sync─►│  tRPC app (Fly.io)        │◄─sync─►│  local SQLite │
+│  (full cache) │        │  Postgres + pgvector      │        │  (full cache) │
+└──────────────┘        │  (Neon, source of truth)  │        └──────────────┘
+                         └──────────────────────────┘
 ```
 
-Alternatives considered:
+### Database decision: Postgres in the cloud, SQLite on devices
+
+The cloud database is **managed Postgres (Neon) with pgvector**. Devices keep local SQLite as an offline cache — SQLite is the right tool *on-device* (Drizzle supports it on both better-sqlite3 and expo-sqlite), but the source of truth deserves a real database:
+
+- **pgvector**: embeddings become a proper indexed vector column with cosine similarity in SQL, replacing the current JSON-string-in-SQLite approach and its in-process similarity scans. This is the single biggest concrete win.
+- **Backups and durability**: Neon gives point-in-time restore and storage redundancy out of the box. No Litestream sidecar, no volume to manage, no restore runbook to maintain.
+- **Concurrency**: multiple devices syncing plus a pipeline cron writing embeddings is exactly the multi-writer situation SQLite-on-a-volume handles poorly and Postgres handles natively.
+- **Full-text search**: `tsvector`/`pg_trgm` for keyword search instead of `LIKE '%term%'` table scans.
+- **Room to grow**: if this becomes a serious long-lived system (agents querying it, more derived data), we won't face a migration later.
+
+Cost of this choice: two Drizzle schemas — the existing SQLite one in `packages/db` (device cache) and a Postgres one in `packages/cloud/schema.ts`. Mitigation: shared zod row types in `packages/db` so the wire format and both schemas can't drift apart silently. The sync tables and derived-data tables exist only on the Postgres side, so the overlap that must be kept in sync by hand is just `thoughts` + `edit_operations`.
+
+Other alternatives considered:
 
 | Option | Verdict |
 |---|---|
-| **Turso / libSQL embedded replicas** | Rejected. Replicates the whole DB to every device, which conflicts with sudo mode (personal notes would land on every device in plaintext). Also adds a vendor dependency for what is a simple sync problem. |
-| **CRDTs (cr-sqlite, Automerge)** | Rejected. Thoughts are append-only; there's nothing to merge. Massive complexity for zero benefit. |
-| **Postgres in the cloud** | Rejected for v1. Would fork `packages/db` into two dialects. Single-user write volume is trivial; SQLite on a Fly volume handles it easily, and we reuse the existing Drizzle schema and `lib.ts` unchanged. |
-| **Custom row-versioned sync over tRPC, SQLite everywhere** | **Chosen.** Smallest delta from today's codebase. |
+| **SQLite on a Fly volume + Litestream** | Rejected (was rev-1 choice). Workable for a toy, but no PITR without restore drills, single-writer contention with the pipeline cron, and no vector/FTS indexing. |
+| **Turso / libSQL embedded replicas** | Rejected. Vendor-specific sync we'd have little control over, and still no pgvector-class vector search. |
+| **CRDTs (cr-sqlite, Automerge)** | Rejected. Thoughts are append-only; there's nothing to merge. |
+| **Supabase instead of Neon** | Viable. We don't need its auth/REST/realtime layers, and plain Neon is a smaller dependency. Swappable behind `DATABASE_URL` if preferences change. |
 
-### Schema changes (`packages/db/schema.ts`)
+### Schema changes
 
-Add to `thoughts` (via Drizzle migration):
+**Device SQLite (`packages/db/schema.ts`)** — add to `thoughts` via Drizzle migration:
 
 ```typescript
 uuid: text("uuid").notNull().unique(),        // global id; local integer PK stays
 access_level: text("access_level").notNull().default("standard"), // 'standard' | 'sudo'
-updated_at: integer("updated_at_ms").notNull(),  // ms epoch, set on every write
-deleted_at: integer("deleted_at_ms"),            // soft delete (tombstone for sync)
-origin_device: text("origin_device"),            // which device created it
+updated_at_ms: integer("updated_at_ms").notNull(),  // set on every write
+deleted_at_ms: integer("deleted_at_ms"),            // soft delete (tombstone for sync)
+origin_device: text("origin_device"),
 ```
 
-New tables:
+Plus a client-side `syncState` key/value table (`lastPulledSeq`, outbox bookkeeping).
+
+Backfill migration: generate a `uuid` for every existing thought, set `updated_at_ms` from `timestamp`, `access_level = 'standard'`.
+
+**Cloud Postgres (`packages/cloud/schema.ts`)**:
 
 ```typescript
-// One row per known device (cloud only)
-devices = { id, name, platform, token_hash, sudo_pubkey, created_at, last_seen_at }
-
-// Per-device sync cursor (client side)
-syncState = { key, value } // e.g. lastPulledSeq, pendingPushIds
-
-// Monotonic change feed (cloud only)
-changeLog = { seq (pk autoincrement), thought_uuid, changed_at_ms }
+thoughts        // same logical columns; uuid is the PK; tsvector column for FTS
+editOperations  // keyed by (thought_uuid, sequence_num)
+devices         // id, name, platform, token_hash, sudo_pubkey, created_at, last_seen_at
+changeLog       // seq (bigserial PK), thought_uuid, changed_at — monotonic pull feed
+chunks, chunkThoughts                    // pipeline output (cloud-only)
+chunkEmbeddings // embedding vector(1536) with an HNSW index — pgvector
+pipelineState, chatSessions              // migrate off device over time
 ```
-
-Backfill migration: generate a `uuid` for every existing thought, set `updated_at` from `timestamp`, `access_level = 'standard'`.
 
 ### Sync protocol
 
 Two endpoints on the cloud router, called by a sync engine inside the existing desktop sidecar (new module in `packages/rpc`, runs on a timer + on-write trigger):
 
-- **`sync.push(thoughts[], editOperations[])`** — client sends locally created rows (identified by uuid). Server upserts by uuid. Idempotent, safe to retry.
-- **`sync.pull(sinceSeq)`** — server returns all changes with `seq > sinceSeq` from `changeLog`, plus the new high-water mark. Client upserts locally, records the cursor in `syncState`.
+- **`sync.push(thoughts[], editOperations[])`** — client sends locally created/updated rows (identified by uuid). Server upserts by uuid and appends to `changeLog`. Idempotent, safe to retry.
+- **`sync.pull(sinceSeq)`** — server returns all changes with `seq > sinceSeq`, plus the new high-water mark. Client upserts locally, records the cursor.
 
-Conflict policy: last-write-wins on `updated_at`. Given append-only writes, conflicts essentially only occur for soft-deletes, where LWW is the correct behavior anyway.
+Conflict policy: last-write-wins on `updated_at_ms`. Given append-only content, conflicts essentially only occur for soft-deletes and access-level changes, where LWW is correct.
 
-**Sudo-aware pull** (see Part 3): `sync.pull` **never returns `access_level = 'sudo'` rows to mobile**, and only returns them to desktop if the device is flagged `sync_sudo = true`. Sudo thoughts are queried live from the cloud during a sudo session instead of being cached.
+**Sudo rows sync everywhere.** All devices receive all rows, including `access_level = 'sudo'`. Access control is enforced at the *query* layer on every replica (cloud and local), not at the sync layer — see Part 3. This keeps the protocol trivial and means offline devices still have their sudo notes available after elevation. At-rest protection is the platform's device encryption (FileVault on Mac, iOS Data Protection on iPhone).
 
-Derived data (`chunks`, `chunk_embeddings`, `chat_sessions`) does **not** sync in v1. The pipeline moves to the cloud (see below) and derived data lives only there; clients query it via the API.
+Derived data (`chunks`, `chunk_embeddings`) does **not** sync down in v1 — it lives only in Postgres, and clients query semantic search via the API.
 
 ### Cloud service
 
 New package: **`packages/cloud`** (deployable Node service).
 
-- Reuses `@thoughts/db` (schema + lib) and the router patterns from `packages/rpc`. The router is a superset: existing procedures + `sync.*` + `sudo.*` (Part 3) + `auth` middleware.
-- **Auth**: every request requires `Authorization: Bearer <device-token>`. Tokens are 32-byte random secrets, generated by a small `pnpm cloud:add-device` script, stored hashed (SHA-256) in the `devices` table. No OAuth, no user accounts — this is a personal, single-user deployment.
-- **Semantic search moves here**: the embedding pipeline (`packages/actions` / pipeline code) runs as a cron inside the cloud service, so search-from-anywhere includes semantic search, and mobile doesn't need to run any pipeline. Pipeline **skips sudo thoughts entirely in v1** (simplest correct behavior).
+- tRPC router mirroring the existing procedure surface (`createThought`, `getThoughtsPaginated`, …) plus `sync.*`, `sudo.*` (Part 3), and `searchSemantic`. Reuses shared zod types from `packages/db`; queries go through drizzle-orm/node-postgres.
+- **Auth**: every request requires `Authorization: Bearer <device-token>`. Tokens are 32-byte random secrets, generated by a small `pnpm cloud:add-device` script, stored hashed (SHA-256) in `devices`. No OAuth, no user accounts — this is a personal, single-user deployment.
+- **Semantic search moves here**: the embedding pipeline runs as a cron inside the cloud service, writing pgvector rows; `searchSemantic` is an indexed cosine-similarity query. The pipeline **skips sudo thoughts entirely in v1** (simplest correct behavior — no leakage through chunks, embeddings, or the chat agent).
 
 ### Deployment infra (artifacts to build)
 
 - `packages/cloud/Dockerfile` — Node 22 slim, pnpm install, runs Drizzle migrations on boot, starts server.
-- `fly.toml` — single Fly.io machine, one region, 1GB volume mounted at `/data` (`THOUGHTS_CONFIG_PATH=/data`), HTTPS-only, auto-stop disabled (needs to be reachable from phone at all times; a single shared-cpu machine is ~$3–5/mo).
-- **Litestream** sidecar process in the container, streaming the SQLite WAL to Cloudflare R2 (or S3). This is the backup story: continuous replication, point-in-time restore.
+- `fly.toml` — single Fly.io machine, one region (same as the Neon region), HTTPS-only, auto-stop disabled so it's always reachable from the phone. ~$3–5/mo; Neon free tier covers the DB comfortably.
 - `.github/workflows/deploy-cloud.yml` — on push to `main` touching `packages/cloud|db`: typecheck, build, `flyctl deploy`.
-- Secrets (Fly secrets, not in repo): `LITESTREAM_*` credentials, `ANTHROPIC_API_KEY` + embedding API key for the pipeline, `SUDO_JWT_SECRET` (Part 3).
+- Secrets (Fly secrets, not in repo): `DATABASE_URL` (Neon), `ANTHROPIC_API_KEY` + embedding API key for the pipeline, `SUDO_JWT_SECRET` (Part 3).
 
 ### Desktop changes
 
@@ -124,14 +136,14 @@ New workspace: **`apps/mobile`** (Expo + TypeScript + tRPC client + TanStack Que
 ### Screens (v1)
 
 1. **Capture** (default screen, opens to keyboard-up) — the mobile equivalent of the quick panel. Text input, context badges, save. Mobile context: location (`expo-location`, reuses the existing metadata JSON shape), device name; clipboard-URL suggestion as a badge.
-2. **Browse/Search** — paginated list (mirrors `getThoughtsPaginated`), search box, metadata badges. A **sudo toggle** in the search bar (Part 3).
+2. **Browse/Search** — paginated list (mirrors `getThoughtsPaginated`), search box, metadata badges. A **sudo toggle** in the search bar and a "mark as sudo" action on list items (Part 3).
 3. **Settings** — pairing (scan a QR code shown by desktop / paste device token), sudo enrollment, sync status.
 
 ### Offline behavior
 
-- Local SQLite via `expo-sqlite` with the same Drizzle schema (drizzle-orm supports expo-sqlite), acting as a **standard-tier cache**: pull-synced copy of standard thoughts + an outbox of unsent captures.
-- Capture always writes locally first, then the sync engine (same push/pull protocol as desktop, shared implementation in a new `packages/sync` if extraction is clean, otherwise duplicated thin client) drains the outbox when online.
-- Sudo thoughts are **never persisted on the phone** — they're fetched live during a sudo session and held in memory only.
+- Local SQLite via `expo-sqlite` with the same Drizzle schema from `packages/db` (drizzle-orm supports expo-sqlite), holding a full pull-synced cache plus an outbox of unsent captures.
+- Capture always writes locally first, then the sync engine (same push/pull protocol as desktop — shared client implementation in a new `packages/sync` if extraction is clean, otherwise a duplicated thin client) drains the outbox when online.
+- Local queries apply the same standard-only default filter as everywhere else; sudo rows are present on disk but never surface without elevation.
 
 ### Distribution
 
@@ -144,20 +156,21 @@ Personal use: EAS Build + TestFlight internal distribution (requires an Apple De
 ### Requirements restated
 
 - Two levels: **standard** and **sudo** (personal).
+- Thoughts are **never sudo at capture time**. The workflow is: capture normally, then later mark thoughts as sudo from the list view (desktop or mobile).
 - Sudo thoughts are invisible to browse, keyword search, semantic search, and the chat agent — everywhere — unless a sudo session is active.
 - Entering sudo mode requires **Face ID on iOS** and **Touch ID on Mac**. Not a password prompt, actual biometrics.
 
 ### Threat model (be honest about what this is)
 
-This protects against: someone using your unlocked devices, screen-sharing/shoulder-surfing, casual queries by agents/tools connected to the API, and your own accidental exposure. It does **not** protect against an attacker with your cloud server's disk or root access (v1 stores sudo notes unencrypted server-side; at-rest encryption is a listed v2 hardening). That's the right trade-off for "quite personal notes" vs. "state secrets."
+This protects against: someone using your unlocked devices, screen-sharing/shoulder-surfing, casual queries by agents/tools connected to the API, and your own accidental exposure. It does **not** protect against an attacker with root on your cloud DB or a mounted, unlocked device disk (v1 stores sudo notes unencrypted; platform disk encryption — FileVault, iOS Data Protection — is the at-rest story, and application-level encryption is a listed v2 hardening). That's the right trade-off for "quite personal notes" vs. "state secrets."
 
 ### Design principle: the server enforces, biometrics gate the key
 
 Client-side filtering would be theater — anyone with the device token could query the API directly. Instead:
 
-1. Every read procedure on the cloud (and the local desktop sidecar) filters `access_level = 'standard'` **by default, at the query layer** (`lib.ts`), not in the UI.
-2. Sudo rows are only included when the request carries a valid **sudo session token**.
-3. A sudo session token can only be minted by proving possession of a key that **physically requires biometrics to use**.
+1. Every read path — cloud Postgres queries, desktop sidecar queries, mobile local queries — filters `access_level = 'standard'` **by default, at the query layer**, not in the UI.
+2. Sudo rows are only included when the request context carries a valid **sudo session**.
+3. A sudo session can only be started by using a key that **physically requires biometrics to release**.
 
 ### Sudo session flow
 
@@ -174,24 +187,25 @@ Client-side filtering would be theater — anyone with the device token could qu
 ```
 
 - **Enrollment** (once per device): generate a P-256 keypair where the private key is stored with biometry-gated access control — Secure Enclave + `kSecAccessControlBiometryCurrentSet` semantics. On iOS: `expo-secure-store` with `requireAuthentication: true`. On Mac: Keychain item with biometry ACL, accessed from Tauri via a small Rust bridge (`security-framework` crate + `LAContext` through `objc2`); the OS itself shows the Touch ID sheet and refuses to release the key without it. Public key is registered in `devices.sudo_pubkey`.
-- **Elevation**: client asks the cloud for a nonce, signs it (OS forces the biometric prompt at this moment), and exchanges the signature for a short-lived JWT (5 min TTL, signed with `SUDO_JWT_SECRET`). The JWT is held in memory only and sent as an `x-sudo-token` header via a tRPC link.
-- **Enforcement**: tRPC middleware validates the JWT and sets `ctx.sudo = true`; every query helper takes an `includeSudo` flag derived only from that context. `sync.pull` for mobile ignores sudo unconditionally.
-- **Expiry UX**: UI shows a countdown pill while sudo is active; queries silently drop back to standard tier when the token expires (no errors, results just narrow).
+- **Cloud elevation**: client asks the cloud for a nonce, signs it (the OS forces the biometric prompt at this moment), and exchanges the signature for a short-lived JWT (5 min TTL, signed with `SUDO_JWT_SECRET`). The JWT is held in memory only and sent as an `x-sudo-token` header via a tRPC link.
+- **Local elevation (offline case)**: since sudo rows live in local replicas, local reads need elevation too. A successful biometric key release starts a 5-minute in-process sudo session in the sidecar (desktop) or app process (mobile) — same key, same prompt, no network required.
+- **Enforcement**: tRPC middleware validates the JWT (cloud) or session flag (local) and sets `ctx.sudo = true`; every query helper takes an `includeSudo` flag derived only from that context.
+- **Expiry UX**: UI shows a countdown pill while sudo is active; queries silently drop back to standard tier when the session expires (no errors, results just narrow).
 
 Note `kSecAccessControlBiometryCurrentSet` means re-enrollment is required if fingerprints/face data change — that's the desired behavior (a newly added fingerprint can't unlock existing sudo access).
 
-### Capture and classification UX
+### Classification UX (list view, not capture)
 
-- Quick panel and mobile capture get a **lock toggle** (e.g. `⌘L` / lock icon) to mark a thought as sudo at capture time. Capturing as sudo does **not** require biometrics (writing a secret is fine; reading them back is what's gated).
-- Reclassifying an existing thought (standard→sudo or back) requires an active sudo session.
-- New procedure: `setThoughtAccessLevel(uuid, level)` (sudo-gated).
+- Capture UIs are untouched — there is no sudo affordance at write time.
+- List view (desktop main window and mobile browse) gets a **"mark as sudo"** action per thought. New procedure: `setThoughtAccessLevel(uuid, level)`, synced like any other write.
+- **Marking standard → sudo requires no elevation** (making something *more* private is always safe). The thought disappears from default views immediately.
+- **Unmarking sudo → standard requires an active sudo session** (you can't reveal what you can't see).
+- Once marked sudo, the thought's `edit_operations` replay is sudo-gated too (`getEditOperations` joins through to the thought's access level).
 
-### Interaction with derived data and local storage
+### Interaction with derived data
 
-- **Pipeline**: skips sudo thoughts in v1. No chunks, no embeddings, no chat-agent visibility. (v2 could build a separate sudo-tier index queryable only in sudo mode.)
-- **Mobile**: sudo thoughts never touch disk; live-fetched, in-memory only.
-- **Desktop**: sudo thoughts live in the local SQLite (it's the capture origin and the DB predates this feature). The local sidecar applies the same default filter and the same elevation flow (Touch ID). Desktop full-disk encryption (FileVault) is the at-rest story for v1.
-- **Edit-operation replay** for sudo thoughts is sudo-gated too (`getEditOperations` joins through to the thought's access level).
+- **Pipeline**: skips sudo thoughts in v1 — no chunks, no embeddings, no chat-agent visibility. If a thought is reclassified to sudo *after* it was chunked/embedded, the pipeline cron reconciles by deleting its derived rows on the next run. (v2 could build a separate sudo-tier vector index queryable only in sudo mode.)
+- **Chat agent** (`packages/chat`) stays standard-tier only, even during a sudo session, in v1 — keeping LLM calls away from personal notes until we decide how that should feel.
 
 ---
 
@@ -201,18 +215,20 @@ Each milestone is a separate PR, independently shippable:
 
 | # | Milestone | Artifacts |
 |---|---|---|
-| 1 | **Schema + migrations** | `uuid`/`access_level`/`updated_at`/`deleted_at` columns, backfill migration, `devices`/`changeLog` tables, `lib.ts` filters default to standard-only |
-| 2 | **Cloud service + deploy infra** | `packages/cloud` (auth middleware, sync router, existing procedures), Dockerfile, `fly.toml`, Litestream config, GitHub Actions deploy workflow, `add-device` script |
+| 1 | **Schema + migrations** | Device SQLite: `uuid`/`access_level`/`updated_at_ms`/`deleted_at_ms` columns + backfill + `syncState`; `lib.ts` filters default to standard-only |
+| 2 | **Cloud service + deploy infra** | `packages/cloud`: Postgres schema (pgvector, tsvector), auth middleware, sync router, mirrored procedures; Dockerfile, `fly.toml`, Neon setup notes, GitHub Actions deploy workflow, `add-device` script |
 | 3 | **Desktop sync engine** | Sync module in sidecar, config for cloud URL + token, QR pairing screen in settings |
-| 4 | **Pipeline to cloud** | Move embedding pipeline into cloud service cron; `searchSemantic` procedure |
-| 5 | **Mobile app MVP** | `apps/mobile` Expo app: capture, browse/search, pairing, offline outbox, EAS config |
-| 6 | **Sudo mode** | Keypair enrollment (Mac Rust bridge + iOS secure store), `sudo.elevate`, JWT middleware, lock toggle in capture UIs, sudo search toggle, countdown pill |
-| 7 | *(v2, optional)* | At-rest encryption for sudo notes (key wrapped by device keys), sudo-tier semantic index, share extension, Android |
+| 4 | **Pipeline to cloud** | Embedding pipeline as cloud cron writing pgvector rows; `searchSemantic` procedure; sudo-reclassification reconciliation |
+| 5 | **Mobile app MVP** | `apps/mobile` Expo app: capture, browse/search, pairing, offline outbox + full local cache, EAS config |
+| 6 | **Sudo mode** | Keypair enrollment (Mac Rust bridge + iOS secure store), `sudo.elevate` + local elevation, JWT/session middleware, `setThoughtAccessLevel` + list-view actions, sudo search toggle, countdown pill |
+| 7 | *(v2, optional)* | Application-level encryption for sudo notes, sudo-tier semantic index, share extension, Android |
 
-## Open questions (defaults chosen, flag if you disagree)
+## Decisions ratified so far
 
-1. **Fly.io + R2** chosen for hosting/backup. Railway/render would also work; Fly has the best volume + SQLite story.
-2. **Desktop syncs sudo notes** (it's the primary device, FileVault-protected); **mobile never does**. If you want desktop to also be fetch-only for sudo, that's a one-flag change.
-3. **5-minute sudo TTL** — long enough to search and read, short enough to not linger.
-4. **Existing notes**: everything currently in the DB backfills as `standard`. Reclassify individually afterward (bulk-reclassify UI is not planned).
-5. **Chat agent** (`packages/chat`) stays standard-tier only, even during a sudo session, in v1 — keeping LLM calls away from personal notes until we decide how that should feel.
+1. **Postgres (Neon) + pgvector** for the cloud DB; SQLite stays on devices as the offline cache. (rev 2 — was SQLite-on-Fly-volume)
+2. **Sudo notes sync to all devices**; enforcement is at the query layer everywhere, at-rest protection is platform disk encryption. (rev 2 — was "mobile never persists sudo")
+3. **Classification happens in list view only**; capture has no sudo affordance. Standard→sudo is free; sudo→standard and reading require biometric elevation. (rev 2)
+4. **Fly.io** hosts the app service; swappable, nothing Fly-specific in the code.
+5. **5-minute sudo TTL**, in-memory only.
+6. **Existing notes** backfill as `standard`.
+7. **Chat agent** stays standard-tier only in v1.
