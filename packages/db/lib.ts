@@ -29,7 +29,7 @@ export function configPath() {
   return process.env.THOUGHTS_CONFIG_PATH
 }
 
-let db: ReturnType<typeof drizzle> = drizzle(`${configPath()}/local.db`)
+let db: ReturnType<typeof drizzle> | undefined
 
 function dbSingleton() {
   if (!db) {
