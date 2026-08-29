@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm"
-import { sqliteTable, integer, text } from "drizzle-orm/sqlite-core"
+import { sqliteTable, integer, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 
 export const thoughts = sqliteTable("thoughts", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -8,6 +8,19 @@ export const thoughts = sqliteTable("thoughts", {
   timestamp: text("timestamp")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
+  // Sync + access-control columns (see docs/SPEC-mobile-cloud-sudo.md).
+  // uuid is the global identity; the integer PK stays local-only.
+  uuid: text("uuid").notNull().default(""),
+  access_level: text("access_level").notNull().default("standard"), // 'standard' | 'sudo'
+  updated_at_ms: integer("updated_at_ms").notNull().default(0),
+  deleted_at_ms: integer("deleted_at_ms"),
+  origin_device: text("origin_device"),
+}, (table) => [uniqueIndex("thoughts_uuid_unique").on(table.uuid)])
+
+// Client-side sync bookkeeping (pull cursor, push cursor, device identity)
+export const syncState = sqliteTable("sync_state", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
 })
 
 export const editOperations = sqliteTable("edit_operations", {

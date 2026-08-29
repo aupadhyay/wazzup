@@ -108,6 +108,10 @@ export function QuickPanel() {
   >([])
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
+  // Capture-time sudo lock (⌘L): the thought is born hidden. Resets after
+  // every capture so it can't be left on by accident.
+  const [sudoCapture, setSudoCapture] = useState(false)
+
   // Record mode state
   const [recordMode, setRecordMode] = useState(false)
   const [editCount, setEditCount] = useState(0)
@@ -207,6 +211,13 @@ export function QuickPanel() {
   }
 
   const handleKeyDown = async (e: React.KeyboardEvent) => {
+    // Cmd+L to toggle capture-time sudo (no biometrics needed to hide)
+    if (e.metaKey && e.key.toLowerCase() === "l") {
+      e.preventDefault()
+      setSudoCapture((prev) => !prev)
+      return
+    }
+
     // Cmd+R to toggle record mode
     if (e.metaKey && e.key.toLowerCase() === "r") {
       e.preventDefault()
@@ -326,7 +337,11 @@ export function QuickPanel() {
         }
 
         createThought(
-          { content: thoughtText, metadata: JSON.stringify(metadata) },
+          {
+            content: thoughtText,
+            metadata: JSON.stringify(metadata),
+            accessLevel: sudoCapture ? "sudo" : undefined,
+          },
           {
             onSuccess: (newThought) => {
               // Update edit history with real thought ID if recording
@@ -343,6 +358,7 @@ export function QuickPanel() {
               setSequenceNum(0)
               setRecordMode(false)
               setConfirmingDiscard(false)
+              setSudoCapture(false)
               lastInputValueRef.current = ""
             },
             onError: (error) => {
@@ -461,6 +477,11 @@ export function QuickPanel() {
             >
               (⌘R)
             </span>
+            {sudoCapture && (
+              <span className="text-xs text-amber-400 font-medium ml-1">
+                🔒 sudo (⌘L)
+              </span>
+            )}
           </div>
         </div>
         {(contextInfo || pastedImages.length > 0) && (

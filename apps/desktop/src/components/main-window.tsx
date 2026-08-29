@@ -4,6 +4,8 @@ import { formatInTimeZone } from "date-fns-tz"
 import { invoke } from "@tauri-apps/api/core"
 import "./scrollbar.css"
 import type { ContextInfo, Image, LocationInfo } from "./quick-panel"
+import { SudoCountdown, useSudo } from "../lib/use-sudo"
+import { CloudSettings } from "./cloud-settings"
 
 function parseImagesFromMetadata(metadata?: string | null): Image[] {
   if (!metadata) return []
@@ -96,6 +98,16 @@ function highlightMatches(text: string, searchQuery: string): React.ReactNode {
 export function MainWindow() {
   const [searchQuery, setSearchQuery] = useState("")
   const debouncedSearchQuery = useDebounce(searchQuery, 300)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
+  const sudo = useSudo()
+  const utils = trpc.useUtils()
+  const setAccessLevel = trpc.setThoughtAccessLevel.useMutation({
+    onSuccess: () => {
+      void utils.getThoughtsPaginated.invalidate()
+      void utils.getThoughts.invalidate()
+    },
+  })
 
   const handleReplayClick = async (thoughtId: number) => {
     try {
@@ -157,15 +169,57 @@ export function MainWindow() {
         data-tauri-drag-region
       />
 
-      <div className="p-4 border-b border-zinc-800">
+      <div className="p-4 border-b border-zinc-800 flex items-center gap-2">
         <input
           type="text"
-          placeholder="Search thoughts..."
+          placeholder={
+            sudo.active ? "Search all thoughts (sudo)..." : "Search thoughts..."
+          }
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-400 focus:outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500"
+          className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-400 focus:outline-none focus:border-zinc-500 focus:ring-1 focus:ring-zinc-500"
         />
+        {sudo.active && sudo.expiresAtMs ? (
+          <button
+            type="button"
+            onClick={() => void sudo.lock()}
+            className="flex items-center gap-1.5 px-3 py-2 bg-amber-500/20 border border-amber-500/40 rounded-lg text-amber-300 text-sm hover:bg-amber-500/30"
+            title="Click to end the sudo session now"
+          >
+            🔓 <SudoCountdown expiresAtMs={sudo.expiresAtMs} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void sudo.unlock()}
+            disabled={sudo.busy || !sudo.enrolled}
+            className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-300 text-sm hover:bg-zinc-700 disabled:opacity-40"
+            title={
+              sudo.enrolled
+                ? "Unlock sudo thoughts with Touch ID"
+                : "Enroll sudo mode in settings first"
+            }
+          >
+            {sudo.busy ? "..." : "🔒 sudo"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-300 text-sm hover:bg-zinc-700"
+          title="Cloud & sudo settings"
+        >
+          ⚙
+        </button>
       </div>
+
+      {sudo.error && (
+        <div className="px-4 py-2 text-xs text-amber-400 border-b border-zinc-800">
+          {sudo.error}
+        </div>
+      )}
+
+      {settingsOpen && <CloudSettings onClose={() => setSettingsOpen(false)} />}
 
       <div className="flex-1 overflow-hidden">
         {isLoading ? (
@@ -214,8 +268,40 @@ export function MainWindow() {
               return (
                 <div
                   key={thought.id}
-                  className="group flex flex-col gap-2 bg-zinc-800/50 rounded-xl p-4 hover:bg-zinc-800 transition-colors"
+                  className={
+                    thought.accessLevel === "sudo"
+                      ? "group flex flex-col gap-2 bg-amber-950/30 border border-amber-500/20 rounded-xl p-4 hover:bg-amber-950/40 transition-colors"
+                      : "group flex flex-col gap-2 bg-zinc-800/50 rounded-xl p-4 hover:bg-zinc-800 transition-colors"
+                  }
                 >
+                  <div className="flex items-center justify-between -mb-1">
+                    {thought.accessLevel === "sudo" ? (
+                      <span className="text-xs text-amber-400/80">🔒 sudo</span>
+                    ) : (
+                      <span />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAccessLevel.mutate({
+                          uuid: thought.uuid,
+                          level:
+                            thought.accessLevel === "sudo" ? "standard" : "sudo",
+                        })
+                      }
+                      disabled={setAccessLevel.isPending}
+                      className="opacity-0 group-hover:opacity-100 text-xs text-zinc-400 hover:text-zinc-200 transition-opacity"
+                      title={
+                        thought.accessLevel === "sudo"
+                          ? "Make standard (requires active sudo session)"
+                          : "Mark as sudo — hides it everywhere until unlocked"
+                      }
+                    >
+                      {thought.accessLevel === "sudo"
+                        ? "make standard"
+                        : "mark as sudo"}
+                    </button>
+                  </div>
                   {thought.hasEditHistory && (
                     <button
                       type="button"

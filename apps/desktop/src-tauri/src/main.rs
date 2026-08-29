@@ -18,6 +18,9 @@ use context::{
     active_arc_url, active_browser_url, get_focused_app, get_location, get_spotify_track,
 };
 
+mod sudo;
+use sudo::{sudo_clear_secret, sudo_release_secret, sudo_store_secret};
+
 // Record mode state
 struct RecordModeState {
     enabled: bool,
@@ -281,7 +284,10 @@ fn main() {
             get_location,
             toggle_record_mode,
             get_record_mode,
-            get_sidecar_port
+            get_sidecar_port,
+            sudo_store_secret,
+            sudo_release_secret,
+            sudo_clear_secret
         ]);
 
     builder
