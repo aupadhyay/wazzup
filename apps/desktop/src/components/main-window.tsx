@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core"
-import { formatInTimeZone } from "date-fns-tz"
+import { invoke } from "@tauri-apps/api/core";
+import { formatInTimeZone } from "date-fns-tz";
 import {
   Check,
   CheckCircle2,
@@ -8,75 +8,75 @@ import {
   ExternalLink,
   History,
   Search,
-} from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { trpc } from "../api"
-import "./scrollbar.css"
-import type { ContextInfo, Image, LocationInfo } from "./quick-panel"
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { trpc } from "../api";
+import "./scrollbar.css";
+import type { ContextInfo, Image, LocationInfo } from "./quick-panel";
 
 interface ParsedMetadata {
-  images: Image[]
-  location: LocationInfo | null
-  url: string | null
+  images: Image[];
+  location: LocationInfo | null;
+  url: string | null;
 }
 
 interface CopyableThought {
-  id: number
-  content: string
-  metadata: unknown
-  timestamp: string
+  id: number;
+  content: string;
+  metadata: unknown;
+  timestamp: string;
 }
 
 function parseMetadata(metadata?: string | null): ParsedMetadata {
-  if (!metadata) return { images: [], location: null, url: null }
+  if (!metadata) return { images: [], location: null, url: null };
 
   try {
-    const parsed = JSON.parse(metadata) as ContextInfo
+    const parsed = JSON.parse(metadata) as ContextInfo;
     return {
       images: Array.isArray(parsed?.images) ? parsed.images : [],
       location: parsed?.location ?? null,
       url: parsed?.url ?? null,
-    }
+    };
   } catch {
-    return { images: [], location: null, url: null }
+    return { images: [], location: null, url: null };
   }
 }
 
 function formatTimestampWithTimeZone(
   timestamp: string,
-  location: LocationInfo | null
+  location: LocationInfo | null,
 ): string {
-  const utcTimestamp = timestamp.includes("Z") ? timestamp : `${timestamp}Z`
-  const timeZone = location?.timeZone ?? "America/New_York"
+  const utcTimestamp = timestamp.includes("Z") ? timestamp : `${timestamp}Z`;
+  const timeZone = location?.timeZone ?? "America/New_York";
   return formatInTimeZone(
     utcTimestamp,
     timeZone,
-    "MMM d, yyyy 'at' h:mm a zzz"
-  )
+    "MMM d, yyyy 'at' h:mm a zzz",
+  );
 }
 
 function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value)
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
 
   useEffect(() => {
-    const handler = setTimeout(() => setDebouncedValue(value), delay)
-    return () => clearTimeout(handler)
-  }, [value, delay])
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
 
-  return debouncedValue
+  return debouncedValue;
 }
 
 function highlightMatches(text: string, searchQuery: string): React.ReactNode {
-  if (!searchQuery.trim()) return text
+  if (!searchQuery.trim()) return text;
 
   const regex = new RegExp(
     `(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
-    "gi"
-  )
-  const parts = text.split(regex)
+    "gi",
+  );
+  const parts = text.split(regex);
 
   return parts.map((part, index) =>
-    regex.test(part) ? (
+    index % 2 === 1 ? (
       <mark
         key={`${part}-${index}`}
         className="rounded-sm bg-amber-300/20 px-0.5 text-amber-100"
@@ -85,13 +85,13 @@ function highlightMatches(text: string, searchQuery: string): React.ReactNode {
       </mark>
     ) : (
       part
-    )
-  )
+    ),
+  );
 }
 
 function timestampToMilliseconds(timestamp: string): number {
-  const utcTimestamp = timestamp.includes("Z") ? timestamp : `${timestamp}Z`
-  return new Date(utcTimestamp).getTime()
+  const utcTimestamp = timestamp.includes("Z") ? timestamp : `${timestamp}Z`;
+  return new Date(utcTimestamp).getTime();
 }
 
 function formatThoughtsForClipboard(thoughts: CopyableThought[]): string {
@@ -99,50 +99,52 @@ function formatThoughtsForClipboard(thoughts: CopyableThought[]): string {
     .sort((first, second) => {
       const timestampDifference =
         timestampToMilliseconds(first.timestamp) -
-        timestampToMilliseconds(second.timestamp)
-      return timestampDifference || first.id - second.id
+        timestampToMilliseconds(second.timestamp);
+      return timestampDifference || first.id - second.id;
     })
     .map((thought) => {
       const metadata = parseMetadata(
-        thought.metadata as string | null | undefined
-      )
+        thought.metadata as string | null | undefined,
+      );
       const timestamp = formatTimestampWithTimeZone(
         thought.timestamp,
-        metadata.location
-      )
-      const urlContext = metadata.url ? `\nURL: ${metadata.url}` : ""
-      return `[${timestamp}] ${thought.content.trim()}${urlContext}`
+        metadata.location,
+      );
+      const urlContext = metadata.url ? `\nURL: ${metadata.url}` : "";
+      return `[${timestamp}] ${thought.content.trim()}${urlContext}`;
     })
-    .join("\n\n")
+    .join("\n\n");
 }
 
 async function writeToClipboard(text: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text)
+    await navigator.clipboard.writeText(text);
   } catch {
-    const textarea = document.createElement("textarea")
-    textarea.value = text
-    textarea.style.position = "fixed"
-    textarea.style.opacity = "0"
-    document.body.appendChild(textarea)
-    textarea.select()
-    const didCopy = document.execCommand("copy")
-    textarea.remove()
-    if (!didCopy) throw new Error("Clipboard access was denied")
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    const didCopy = document.execCommand("copy");
+    textarea.remove();
+    if (!didCopy) throw new Error("Clipboard access was denied");
   }
 }
 
 export function MainWindow() {
-  const [searchQuery, setSearchQuery] = useState("")
-  const [activeThoughtId, setActiveThoughtId] = useState<number | null>(null)
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeThoughtId, setActiveThoughtId] = useState<number | null>(null);
   const [selectedThoughts, setSelectedThoughts] = useState<
     Map<number, CopyableThought>
-  >(() => new Map())
-  const [copyMessage, setCopyMessage] = useState<string | null>(null)
-  const debouncedSearchQuery = useDebounce(searchQuery, 300)
-  const searchInputRef = useRef<HTMLInputElement>(null)
-  const thoughtRefs = useRef(new Map<number, HTMLDivElement>())
-  const copyMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  >(() => new Map());
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
+  const debouncedSearchQuery = useDebounce(searchQuery, 300);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const thoughtRefs = useRef(new Map<number, HTMLDivElement>());
+  const copyMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const {
     data,
@@ -161,128 +163,131 @@ export function MainWindow() {
     {
       getNextPageParam: (lastPage) => lastPage.nextCursor,
       retry: 2,
-    }
-  )
+    },
+  );
 
   const filteredThoughts = useMemo(
     () => data?.pages.flatMap((page) => page.items) ?? [],
-    [data]
-  )
+    [data],
+  );
 
   const handleReplayClick = async (thoughtId: number) => {
     try {
-      await invoke("open_replay_window", { thoughtId })
+      await invoke("open_replay_window", { thoughtId });
     } catch (replayError) {
-      console.error("Failed to open replay window:", replayError)
+      console.error("Failed to open replay window:", replayError);
     }
-  }
+  };
 
   const showCopyMessage = useCallback((message: string) => {
     if (copyMessageTimerRef.current) {
-      clearTimeout(copyMessageTimerRef.current)
+      clearTimeout(copyMessageTimerRef.current);
     }
-    setCopyMessage(message)
-    copyMessageTimerRef.current = setTimeout(() => setCopyMessage(null), 1800)
-  }, [])
+    setCopyMessage(message);
+    copyMessageTimerRef.current = setTimeout(() => setCopyMessage(null), 1800);
+  }, []);
 
   const toggleThought = useCallback((thought: CopyableThought) => {
     setSelectedThoughts((current) => {
-      const next = new Map(current)
+      const next = new Map(current);
       if (next.has(thought.id)) {
-        next.delete(thought.id)
+        next.delete(thought.id);
       } else {
-        next.set(thought.id, thought)
+        next.set(thought.id, thought);
       }
-      return next
-    })
-  }, [])
+      return next;
+    });
+  }, []);
 
   const copySelectedThoughts = useCallback(async () => {
     if (selectedThoughts.size === 0) {
-      showCopyMessage("Select thoughts with Space first")
-      return
+      showCopyMessage("Select thoughts with Space first");
+      return;
     }
 
     try {
       await writeToClipboard(
-        formatThoughtsForClipboard([...selectedThoughts.values()])
-      )
+        formatThoughtsForClipboard([...selectedThoughts.values()]),
+      );
       showCopyMessage(
         `Copied ${selectedThoughts.size} thought${
           selectedThoughts.size === 1 ? "" : "s"
-        } chronologically`
-      )
+        } chronologically`,
+      );
     } catch (clipboardError) {
-      console.error("Failed to copy thoughts:", clipboardError)
-      showCopyMessage("Could not access the clipboard")
+      console.error("Failed to copy thoughts:", clipboardError);
+      showCopyMessage("Could not access the clipboard");
     }
-  }, [selectedThoughts, showCopyMessage])
+  }, [selectedThoughts, showCopyMessage]);
 
   useEffect(() => {
     if (
       filteredThoughts.length > 0 &&
       !filteredThoughts.some((thought) => thought.id === activeThoughtId)
     ) {
-      setActiveThoughtId(filteredThoughts[0].id)
+      setActiveThoughtId(filteredThoughts[0].id);
     }
-  }, [activeThoughtId, filteredThoughts])
+  }, [activeThoughtId, filteredThoughts]);
 
   useEffect(() => {
-    if (activeThoughtId === null) return
+    if (activeThoughtId === null) return;
     thoughtRefs.current
       .get(activeThoughtId)
-      ?.scrollIntoView({ block: "nearest", behavior: "smooth" })
-  }, [activeThoughtId])
+      ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeThoughtId]);
 
   useEffect(() => {
     return () => {
       if (copyMessageTimerRef.current) {
-        clearTimeout(copyMessageTimerRef.current)
+        clearTimeout(copyMessageTimerRef.current);
       }
-    }
-  }, [])
+    };
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null
+      const target = event.target as HTMLElement | null;
       const isEditing =
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
-        target?.isContentEditable
+        target?.isContentEditable;
 
-      if (isEditing) return
+      if (isEditing) return;
 
       if (event.key === "/") {
-        event.preventDefault()
-        searchInputRef.current?.focus()
-        return
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        return;
       }
 
       if (
         (event.key === "ArrowDown" || event.key === "ArrowUp") &&
         filteredThoughts.length > 0
       ) {
-        event.preventDefault()
+        event.preventDefault();
         const currentIndex = filteredThoughts.findIndex(
-          (thought) => thought.id === activeThoughtId
-        )
-        const direction = event.key === "ArrowDown" ? 1 : -1
-        const nextIndex = Math.min(
-          filteredThoughts.length - 1,
-          Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + direction)
-        )
-        setActiveThoughtId(filteredThoughts[nextIndex].id)
-        return
+          (thought) => thought.id === activeThoughtId,
+        );
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        const nextIndex =
+          currentIndex < 0
+            ? 0
+            : Math.min(
+                filteredThoughts.length - 1,
+                Math.max(0, currentIndex + direction),
+              );
+        setActiveThoughtId(filteredThoughts[nextIndex].id);
+        return;
       }
 
       if (event.key === " " && activeThoughtId !== null) {
         const activeThought = filteredThoughts.find(
-          (thought) => thought.id === activeThoughtId
-        )
-        if (!activeThought) return
-        event.preventDefault()
-        toggleThought(activeThought)
-        return
+          (thought) => thought.id === activeThoughtId,
+        );
+        if (!activeThought) return;
+        event.preventDefault();
+        toggleThought(activeThought);
+        return;
       }
 
       if (
@@ -291,45 +296,45 @@ export function MainWindow() {
         !event.ctrlKey &&
         !window.getSelection()?.toString()
       ) {
-        event.preventDefault()
-        void copySelectedThoughts()
-        return
+        event.preventDefault();
+        void copySelectedThoughts();
+        return;
       }
 
       if (event.key === "Escape" && selectedThoughts.size > 0) {
-        event.preventDefault()
-        setSelectedThoughts(new Map())
+        event.preventDefault();
+        setSelectedThoughts(new Map());
       }
-    }
+    };
 
-    window.addEventListener("keydown", handleKeyDown)
-    return () => window.removeEventListener("keydown", handleKeyDown)
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, [
     activeThoughtId,
     copySelectedThoughts,
     filteredThoughts,
     selectedThoughts.size,
     toggleThought,
-  ])
+  ]);
 
-  const observerTarget = useRef<HTMLDivElement>(null)
+  const observerTarget = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const target = observerTarget.current
-    if (!target) return
+    const target = observerTarget.current;
+    if (!target) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
-          void fetchNextPage()
+          void fetchNextPage();
         }
       },
-      { threshold: 0.1 }
-    )
+      { threshold: 0.1 },
+    );
 
-    observer.observe(target)
-    return () => observer.disconnect()
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#101112] text-zinc-100">
@@ -368,11 +373,11 @@ export function MainWindow() {
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key !== "Escape") return
+                if (event.key !== "Escape") return;
                 if (searchQuery) {
-                  setSearchQuery("")
+                  setSearchQuery("");
                 } else {
-                  event.currentTarget.blur()
+                  event.currentTarget.blur();
                 }
               }}
               className="h-11 w-full rounded-xl border border-white/10 bg-white/[0.045] py-2 pl-10 pr-14 text-sm text-zinc-100 shadow-inner shadow-black/20 outline-none transition placeholder:text-zinc-600 focus:border-amber-300/40 focus:bg-white/[0.065] focus:ring-2 focus:ring-amber-300/10"
@@ -447,32 +452,32 @@ export function MainWindow() {
             >
               {filteredThoughts.map((thought) => {
                 const metadata = parseMetadata(
-                  thought.metadata as unknown as string | null
-                )
+                  thought.metadata as unknown as string | null,
+                );
                 const timestamp = formatTimestampWithTimeZone(
                   thought.timestamp,
-                  metadata.location
-                )
-                const isActive = thought.id === activeThoughtId
-                const isSelected = selectedThoughts.has(thought.id)
+                  metadata.location,
+                );
+                const isActive = thought.id === activeThoughtId;
+                const isSelected = selectedThoughts.has(thought.id);
 
                 return (
                   <div
                     key={thought.id}
                     ref={(element) => {
                       if (element) {
-                        thoughtRefs.current.set(thought.id, element)
+                        thoughtRefs.current.set(thought.id, element);
                       } else {
-                        thoughtRefs.current.delete(thought.id)
+                        thoughtRefs.current.delete(thought.id);
                       }
                     }}
                     role="option"
                     aria-selected={isSelected}
                     tabIndex={-1}
                     onClick={() => {
-                      setActiveThoughtId(thought.id)
+                      setActiveThoughtId(thought.id);
                       if (!window.getSelection()?.toString()) {
-                        toggleThought(thought)
+                        toggleThought(thought);
                       }
                     }}
                     className={`group relative grid grid-cols-[2rem_minmax(0,1fr)] gap-3 rounded-xl border px-3 py-3.5 transition-all ${
@@ -486,9 +491,9 @@ export function MainWindow() {
                     <button
                       type="button"
                       onClick={(event) => {
-                        event.stopPropagation()
-                        setActiveThoughtId(thought.id)
-                        toggleThought(thought)
+                        event.stopPropagation();
+                        setActiveThoughtId(thought.id);
+                        toggleThought(thought);
                       }}
                       className={`mt-0.5 flex h-6 w-6 items-center justify-center rounded-full border transition-all ${
                         isSelected
@@ -523,8 +528,8 @@ export function MainWindow() {
                           <button
                             type="button"
                             onClick={(event) => {
-                              event.stopPropagation()
-                              void handleReplayClick(thought.id)
+                              event.stopPropagation();
+                              void handleReplayClick(thought.id);
                             }}
                             className="flex items-center gap-1 transition-colors hover:text-zinc-200"
                             title="View edit history"
@@ -539,7 +544,7 @@ export function MainWindow() {
                         <span className="select-text text-[15px] leading-7 text-zinc-200">
                           {highlightMatches(
                             thought.content,
-                            debouncedSearchQuery
+                            debouncedSearchQuery,
                           )}
                         </span>
                       </div>
@@ -562,7 +567,7 @@ export function MainWindow() {
                       <div className="pointer-events-none absolute inset-y-3 left-0 w-0.5 rounded-full bg-amber-300/80" />
                     )}
                   </div>
-                )
+                );
               })}
 
               <div ref={observerTarget} className="h-4" />
@@ -630,5 +635,5 @@ export function MainWindow() {
         </div>
       )}
     </div>
-  )
+  );
 }
