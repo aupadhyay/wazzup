@@ -1,6 +1,6 @@
 # Spec: Mobile App, Cloud Sync, and Sudo Mode
 
-Status: **Draft — for review before implementation** (rev 3: sudo toggle available at capture time too)
+Status: **Implemented** (rev 4 — see "As built" at the bottom for deviations from the draft)
 
 This spec covers three connected features:
 
@@ -222,6 +222,19 @@ Each milestone is a separate PR, independently shippable:
 | 5 | **Mobile app MVP** | `apps/mobile` Expo app: capture, browse/search, pairing, offline outbox + full local cache, EAS config |
 | 6 | **Sudo mode** | Keypair enrollment (Mac Rust bridge + iOS secure store), `sudo.elevate` + local elevation, JWT/session middleware, `setThoughtAccessLevel` + list-view actions, capture-time lock toggle (`⌘L` / mobile), sudo search toggle, countdown pill |
 | 7 | *(v2, optional)* | Application-level encryption for sudo notes, sudo-tier semantic index, share extension, Android |
+
+## As built (implementation deviations)
+
+Everything above stands except these deliberate simplifications:
+
+1. **Sudo proof is an HMAC possession proof, not a P-256 Secure Enclave signature.** Each device enrolls its own random 32-byte secret, stored in the biometry-gated keychain item (`BIOMETRY_CURRENT_SET` on Mac via `security-framework`, `requireAuthentication` SecureStore on iOS). Elevation = HMAC-SHA256 over a single-use server nonce. Rationale: ECDSA signing of arbitrary payloads isn't reachable from Expo without custom native modules; the biometric gate — the part that matters — is identical. Cost: the server stores the per-device secret (protected by DB access + TLS), consistent with the stated threat model. P-256 signatures move to the v2 hardening list.
+2. **Offline elevation**: the sidecar/app verifies the secret against a locally stored hash and starts an in-process 5-minute session, so sudo works with no network; a cloud JWT is fetched opportunistically for cloud-side queries.
+3. **Cloud keyword search uses ILIKE** (matches the current desktop `LIKE` behavior); the tsvector/GIN column is deferred.
+4. **Pipeline v1 embeds one chunk per thought** (whole content, OpenAI `text-embedding-3-small`, 1536-dim pgvector + HNSW). LLM-based semantic chunking can slot in without schema changes. Reconciliation deletes derived rows of thoughts reclassified to sudo.
+5. **Mobile UI**: plain React Native StyleSheet + a manual 3-tab switcher instead of NativeWind/expo-router (fewer moving parts, same screens).
+6. **Desktop pairing** is a paste-the-token settings panel (main window ⚙) rather than a QR flow.
+7. **Edit operations sync desktop↔cloud but are not stored on mobile** (no record mode there); `chat_sessions` stays local to desktop.
+8. **Not yet verified on real hardware**: the macOS Touch ID keychain path (Rust bridge compiles only on macOS) and the iOS app itself — both need a manual pass on your machines. Everything server-side and the desktop↔cloud sync loop are covered by the smoke/e2e scripts described in the PR.
 
 ## Decisions ratified so far
 

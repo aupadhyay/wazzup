@@ -87,7 +87,7 @@ export async function syncNow(): Promise<{ synced: boolean; error?: string }> {
 
 // Debounced push-after-write so a capture reaches the cloud within seconds
 // without hammering it during bursts (e.g. edit-operation streams).
-let pending: NodeJS.Timeout | null = null
+let pending: ReturnType<typeof setTimeout> | null = null
 export function triggerSync(delayMs = 3_000) {
   if (pending) clearTimeout(pending)
   pending = setTimeout(() => {
