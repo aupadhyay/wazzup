@@ -96,7 +96,15 @@ export function init(): void {
   console.error = (...args: unknown[]) => {
     rotateIfNeeded()
     const message = formatMessage("ERROR", args)
-    logStream?.write(message)
+    try {
+      if (logFilePath) {
+        fs.appendFileSync(logFilePath, message)
+      } else {
+        logStream?.write(message)
+      }
+    } catch {
+      logStream?.write(message)
+    }
     originalConsoleError(...args)
   }
 }

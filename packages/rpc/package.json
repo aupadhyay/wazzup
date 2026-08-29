@@ -5,7 +5,7 @@
   "main": "build/server.js",
   "scripts": {
     "build-help": "pkg --help",
-    "build": "tsup && pkg build/server.js --config package.json --target node18-macos-x64 --output dist/server && cp dist/server dist/server-aarch64-apple-darwin"
+    "build": "tsx scripts/build-sidecar.ts"
   },
   "keywords": [],
   "author": "",
