@@ -24,3 +24,7 @@ libc = "0.2"
 dirs = "5.0"
 dotenvy = "0.15"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Biometry-gated keychain storage for the sudo secret (Touch ID).
+security-framework = "3"
+
