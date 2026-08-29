@@ -14,7 +14,9 @@ mod config;
 use config::Config;
 
 mod context;
-use context::{active_arc_url, get_focused_app, get_location, get_spotify_track};
+use context::{
+    active_arc_url, active_browser_url, get_focused_app, get_location, get_spotify_track,
+};
 
 // Record mode state
 struct RecordModeState {
@@ -273,6 +275,7 @@ fn main() {
             open_replay_window,
             close_quickpanel,
             active_arc_url,
+            active_browser_url,
             get_spotify_track,
             get_focused_app,
             get_location,
